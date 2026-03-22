@@ -241,6 +241,23 @@ async def _run_langgraph_synthesis(state: PipelineState, emit: EventCallback) ->
                     "data": {"report": report_data},
                 })
 
+    # Fire eval in background + aggregate pipeline eval
+    try:
+        import asyncio as _asyncio
+        from backend.pipeline.eval_runner import evaluate_agent_output, evaluate_pipeline_health
+        synthesis_eval = _asyncio.create_task(
+            evaluate_agent_output("synthesis", report_data, emit)
+        )
+
+        async def _run_pipeline_eval():
+            syn_result = await synthesis_eval
+            agent_results = [r for r in [syn_result] if r is not None]
+            await evaluate_pipeline_health(agent_results, emit)
+
+        _asyncio.create_task(_run_pipeline_eval())
+    except Exception as e:
+        logger.debug(f"Synthesis eval skipped: {e}")
+
     return state
 
 
@@ -1172,6 +1189,23 @@ async def _run_simple_synthesis(state: PipelineState, emit: EventCallback) -> Pi
         "agent": "synthesis",
         "data": {"report": report_data},
     })
+
+    # Fire eval in background + aggregate pipeline eval
+    try:
+        import asyncio as _asyncio
+        from backend.pipeline.eval_runner import evaluate_agent_output, evaluate_pipeline_health
+        synthesis_eval = _asyncio.create_task(
+            evaluate_agent_output("synthesis", report_data, emit)
+        )
+
+        async def _run_pipeline_eval():
+            syn_result = await synthesis_eval
+            agent_results = [r for r in [syn_result] if r is not None]
+            await evaluate_pipeline_health(agent_results, emit)
+
+        _asyncio.create_task(_run_pipeline_eval())
+    except Exception as e:
+        logger.debug(f"Synthesis eval skipped: {e}")
 
     return state
 

@@ -437,6 +437,19 @@ export interface AgentResultEvent {
   timestamp: string;
 }
 
+export interface EvalScoreEvent {
+  type: "eval_score";
+  data: EvalScore & { tool_calls?: number; policy_type?: string };
+  agent: string;
+  timestamp: string;
+}
+
+export interface EvalPipelineEvent {
+  type: "eval_pipeline";
+  data: EvalPipelineResult;
+  timestamp: string;
+}
+
 export type PipelineEvent =
   | ClassifierThinkingEvent
   | ClassifierCompleteEvent
@@ -451,6 +464,8 @@ export type PipelineEvent =
   | SynthesisPhaseEvent
   | SynthesisThinkingEvent
   | SynthesisCompleteEvent
+  | EvalScoreEvent
+  | EvalPipelineEvent
   | ErrorEvent
   | PipelineCompleteEvent
   | PipelineErrorEvent
@@ -486,4 +501,30 @@ export interface PipelineState {
   synthesisThinkingSteps: ThinkingStep[];
   synthesis: SynthesisReport | null;
   error: string | null;
+  evalScores: Record<string, EvalScore>;
+  evalPipeline: EvalPipelineResult | null;
+}
+
+export interface EvalRubricResult {
+  id: string;
+  name: string;
+  passed: boolean;
+}
+
+export interface EvalScore {
+  agent: string;
+  score: number;
+  passed: number;
+  total: number;
+  status: "pass" | "fail";
+  rubrics: EvalRubricResult[];
+}
+
+export interface EvalPipelineResult {
+  overall_score: number;
+  total_passed: number;
+  total_rubrics: number;
+  agents_evaluated: number;
+  agent_scores: Record<string, { score: number; status: string }>;
+  pipeline_status: string;
 }
