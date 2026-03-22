@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 
 interface QueryInputProps {
   onSubmit: (query: string) => void;
+  onMockSubmit?: (query: string) => void;
 }
 
 function BoltIcon({ size = 28 }: { size?: number }) {
@@ -22,7 +23,7 @@ const EXAMPLE_QUERIES = [
   "What if student loan interest rates are capped at 3%?",
 ];
 
-export default function QueryInput({ onSubmit }: QueryInputProps) {
+export default function QueryInput({ onSubmit, onMockSubmit }: QueryInputProps) {
   const [query, setQuery] = useState("");
   const trimmed = query.trim();
   const canRun = trimmed.length >= 10;
@@ -84,19 +85,29 @@ export default function QueryInput({ onSubmit }: QueryInputProps) {
             <span className="text-[12px] text-white/20">
               {trimmed.length > 0 && `${trimmed.length} chars`}
             </span>
-            <button
-              onClick={submit}
-              disabled={!canRun}
-              className={cn(
-                "flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#ffe4a6] via-[#ffd06e] to-[#ffb870] px-5 py-2.5 text-[15px] font-semibold text-[#101319] transition",
-                canRun
-                  ? "hover:shadow-[0_4px_12px_rgba(245,158,11,0.4)] hover:brightness-105"
-                  : "cursor-not-allowed opacity-30",
+            <div className="flex items-center gap-2">
+              {onMockSubmit && (
+                <button
+                  onClick={() => onMockSubmit(trimmed || EXAMPLE_QUERIES[0])}
+                  className="flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-[14px] font-medium text-white/50 transition hover:border-white/20 hover:text-white/70"
+                >
+                  Demo
+                </button>
               )}
-            >
-              <BoltIcon size={16} />
-              Analyze
-            </button>
+              <button
+                onClick={submit}
+                disabled={!canRun}
+                className={cn(
+                  "flex items-center gap-2 rounded-xl bg-gradient-to-r from-[#ffe4a6] via-[#ffd06e] to-[#ffb870] px-5 py-2.5 text-[15px] font-semibold text-[#101319] transition",
+                  canRun
+                    ? "hover:shadow-[0_4px_12px_rgba(245,158,11,0.4)] hover:brightness-105"
+                    : "cursor-not-allowed opacity-30",
+                )}
+              >
+                <BoltIcon size={16} />
+                Analyze
+              </button>
+            </div>
           </div>
         </div>
 

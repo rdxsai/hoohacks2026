@@ -273,5 +273,14 @@ export function usePipeline() {
 
   useEffect(() => cleanup, [cleanup]);
 
-  return { state, startPipeline };
+  const startMockPipeline = useCallback(
+    (query: string) => {
+      cleanup();
+      dispatch({ type: "pipeline/start", query });
+      runMockPipeline(query);
+    },
+    [cleanup, runMockPipeline],
+  );
+
+  return { state, startPipeline, startMockPipeline };
 }

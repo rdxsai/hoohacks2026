@@ -19,10 +19,15 @@ function BoltIcon() {
 
 export default function AppShell() {
   const [screen, setScreen] = useState<Screen>("query");
-  const { state, startPipeline } = usePipeline();
+  const { state, startPipeline, startMockPipeline } = usePipeline();
 
   const handleSubmit = (query: string) => {
     startPipeline(query);
+    setScreen("pipeline");
+  };
+
+  const handleMockSubmit = (query: string) => {
+    startMockPipeline(query);
     setScreen("pipeline");
   };
 
@@ -73,7 +78,7 @@ export default function AppShell() {
         "transition-all duration-500",
         screen === "query" ? "opacity-100 scale-100" : "opacity-0 scale-95 absolute inset-0 pointer-events-none",
       )}>
-        {screen === "query" && <QueryInput onSubmit={handleSubmit} />}
+        {screen === "query" && <QueryInput onSubmit={handleSubmit} onMockSubmit={handleMockSubmit} />}
       </div>
       <div className={cn(
         "transition-all duration-500",
