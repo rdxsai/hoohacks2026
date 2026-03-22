@@ -67,6 +67,27 @@ echo "ready"
 echo -n "  litd-seller: "
 until $LNCLI_SELLER getinfo > /dev/null 2>&1; do sleep 1; done
 echo "ready"
+
+# Wait for wallets to fully sync to chain (getinfo succeeds before wallet sync)
+echo -n "  buyer wallet sync: "
+SYNC_RETRIES=30
+while [ $SYNC_RETRIES -gt 0 ]; do
+    SYNCED=$($LNCLI_BUYER getinfo 2>/dev/null | jq -r '.synced_to_chain // "false"')
+    if [ "$SYNCED" = "true" ]; then break; fi
+    sleep 2
+    SYNC_RETRIES=$((SYNC_RETRIES - 1))
+done
+echo "synced"
+
+echo -n "  seller wallet sync: "
+SYNC_RETRIES=30
+while [ $SYNC_RETRIES -gt 0 ]; do
+    SYNCED=$($LNCLI_SELLER getinfo 2>/dev/null | jq -r '.synced_to_chain // "false"')
+    if [ "$SYNCED" = "true" ]; then break; fi
+    sleep 2
+    SYNC_RETRIES=$((SYNC_RETRIES - 1))
+done
+echo "synced"
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -91,7 +112,18 @@ echo "[3/7] Connecting buyer to seller..."
 SELLER_PUBKEY=$($LNCLI_SELLER getinfo | jq -r '.identity_pubkey')
 echo "  Seller pubkey: ${SELLER_PUBKEY:0:20}..."
 
-$LNCLI_BUYER connect "${SELLER_PUBKEY}@litd-seller:9735" 2>/dev/null || true
+# Retry connect — server may still be initializing subsystems
+CONNECT_RETRIES=10
+while [ $CONNECT_RETRIES -gt 0 ]; do
+    if $LNCLI_BUYER connect "${SELLER_PUBKEY}@litd-seller:9735" 2>/dev/null; then
+        break
+    fi
+    ERR=$($LNCLI_BUYER connect "${SELLER_PUBKEY}@litd-seller:9735" 2>&1 || true)
+    if echo "$ERR" | grep -q "already connected"; then break; fi
+    echo "  Waiting for buyer to accept connections... ($CONNECT_RETRIES retries left)"
+    sleep 3
+    CONNECT_RETRIES=$((CONNECT_RETRIES - 1))
+done
 echo "  Connected"
 echo ""
 
@@ -99,7 +131,24 @@ echo ""
 # 4. Open channel
 # ---------------------------------------------------------------------------
 echo "[4/7] Opening channel (${CHANNEL_SIZE} sats)..."
-$LNCLI_BUYER openchannel --node_key="$SELLER_PUBKEY" --local_amt=$CHANNEL_SIZE 2>&1 | head -1
+
+# Retry openchannel — server may still be starting
+OPEN_RETRIES=10
+while [ $OPEN_RETRIES -gt 0 ]; do
+    RESULT=$($LNCLI_BUYER openchannel --node_key="$SELLER_PUBKEY" --local_amt=$CHANNEL_SIZE 2>&1 | head -1)
+    if echo "$RESULT" | grep -q "funding_txid"; then
+        echo "  $RESULT"
+        break
+    fi
+    if echo "$RESULT" | grep -q "still in the process of starting"; then
+        echo "  Server still starting... ($OPEN_RETRIES retries left)"
+        sleep 3
+        OPEN_RETRIES=$((OPEN_RETRIES - 1))
+    else
+        echo "  $RESULT"
+        break
+    fi
+done
 echo ""
 
 # ---------------------------------------------------------------------------

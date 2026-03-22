@@ -22,7 +22,9 @@ export default function LightningRow({ payment }: Props) {
         {" · "}
         {payment.invoice_amount_sats} sats → {payment.service}
       </div>
-      <div className="text-[10px] text-amber-100/70">{payment.duration_ms}ms</div>
+      {payment.duration_ms > 0 && (
+        <div className="text-[10px] text-amber-100/70">{Math.round(payment.duration_ms)}ms</div>
+      )}
       <span
         className={cn(
           "rounded px-2 py-0.5 text-[10px] font-medium",

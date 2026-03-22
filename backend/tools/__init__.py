@@ -6,6 +6,8 @@ from backend.tools.search_openalex import search_openalex
 from backend.tools.search_cbo_reports import search_cbo_reports
 from backend.tools.web_search_news import web_search_news
 from backend.tools.fetch_document_text import fetch_document_text
+from backend.tools.calculate_elasticity import calculate_elasticity
+from backend.tools.run_scenario_analysis import run_scenario_analysis
 
 __all__ = [
     "fred_search",
@@ -16,4 +18,6 @@ __all__ = [
     "search_cbo_reports",
     "web_search_news",
     "fetch_document_text",
+    "calculate_elasticity",
+    "run_scenario_analysis",
 ]

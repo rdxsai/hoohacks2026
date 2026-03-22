@@ -152,23 +152,20 @@ class PremiumDataAgent:
                 "data": {"scenario": scenario, "services": list(PREMIUM_SERVICES.keys())},
             })
 
-        # Fetch all three premium services in parallel
-        tasks = {}
-        for service_type, svc in PREMIUM_SERVICES.items():
-            url = f"{self.aperture_url}{svc['path'].format(scenario=scenario)}"
-            tasks[service_type] = self._fetch_with_events(
-                url=url,
-                service_name=svc["name"],
-                on_event=on_event,
-            )
-
-        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-
+        # Fetch premium services sequentially — Lightning channel can't
+        # reliably handle concurrent HTLC payments through the same channel.
         premium_data = {}
         payments = []
 
-        for service_type, result in zip(tasks.keys(), results):
-            if isinstance(result, Exception):
+        for service_type, svc in PREMIUM_SERVICES.items():
+            url = f"{self.aperture_url}{svc['path'].format(scenario=scenario)}"
+            try:
+                result = await self._fetch_with_events(
+                    url=url,
+                    service_name=svc["name"],
+                    on_event=on_event,
+                )
+            except Exception:
                 continue
             if result.success:
                 premium_data[service_type] = result.data
