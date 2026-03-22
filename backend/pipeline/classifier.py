@@ -114,6 +114,10 @@ async def run_classifier(state: PipelineState, emit: EventCallback) -> PipelineS
                 "parameters": adk_output.policy_params or {},
                 "affected_populations": [],
             }
+            # Propagate cleaned_query so all downstream stages use the
+            # normalised version instead of the raw user input
+            if adk_output.cleaned_query:
+                state.query = adk_output.cleaned_query
     except Exception:
         pass
 
