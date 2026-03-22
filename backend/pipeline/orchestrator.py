@@ -34,8 +34,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from backend.models.pipeline import (
-    AgentChallenge,
-    AgentRebuttal,
     SectorReport,
     SynthesisReport,
 )
@@ -67,11 +65,7 @@ class PipelineState:
     # Stage 2 output
     sector_reports: list[SectorReport] = field(default_factory=list)
 
-    # Stage 3 output (debate)
-    challenges: list[AgentChallenge] = field(default_factory=list)
-    rebuttals: list[AgentRebuttal] = field(default_factory=list)
-
-    # Stage 4 output (synthesis)
+    # Stage 3 output (synthesis)
     synthesis: SynthesisReport | None = None
 
     # Timing
@@ -110,7 +104,6 @@ async def run_pipeline(
     from backend.pipeline.classifier import run_classifier
     from backend.pipeline.analyst import run_analyst
     from backend.pipeline.sector import run_sector_agents
-    from backend.pipeline.debate import run_debate
     from backend.pipeline.synthesis import run_synthesis
 
     try:
@@ -134,15 +127,10 @@ async def run_pipeline(
         state = await run_sector_agents(state, _emit)
         state.stage_times["sector"] = time.time() - t2
 
-        # Stage 3: Debate (adversarial challenge + rebuttal)
+        # Stage 3: Synthesis
         t3 = time.time()
-        state = await run_debate(state, _emit)
-        state.stage_times["debate"] = time.time() - t3
-
-        # Stage 4: Synthesis
-        t4 = time.time()
         state = await run_synthesis(state, _emit)
-        state.stage_times["synthesis"] = time.time() - t4
+        state.stage_times["synthesis"] = time.time() - t3
 
         total = time.time() - state.start_time
         state.stage_times["total"] = total
@@ -193,8 +181,6 @@ def _current_stage(state: PipelineState) -> str:
     """Determine which stage we're in based on what's populated."""
     if state.synthesis:
         return "synthesis"
-    if state.challenges:
-        return "debate"
     if state.sector_reports:
         return "sector"
     if state.briefing:
