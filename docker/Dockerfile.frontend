@@ -9,7 +9,10 @@ RUN npm install
 # Copy source
 COPY frontend/ ./
 
+# Next.js needs NEXT_PUBLIC_ vars at build time for static inlining,
+# but in dev mode they're read at runtime — so just pass via env.
+ENV NEXT_PUBLIC_API_URL=http://localhost:8000
+
 EXPOSE 3000
 
-# TODO (Samank): update once frontend framework is confirmed (Next.js / Vite)
 CMD ["npm", "run", "dev"]

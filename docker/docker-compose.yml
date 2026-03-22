@@ -1,37 +1,18 @@
-version: "3.9"
-
-# ============================================================
-# PolicyPulse — Docker Compose
-# Pratham owns this file (infra module)
+# PolicyPulse — Docker Compose (Backend + Frontend only, no Lightning)
 #
-# Services:
-#   backend   — FastAPI (port 8000)
-#   frontend  — React/Next.js (port 3000)
+# Use this for development when you don't need the Lightning stack.
+# For full stack with Lightning payments: docker-compose.fullstack.yml
 #
-# TODO (Praneeth): bitcoind, LND, Aperture, and mock premium
-#   services will be added here when the Lightning layer is ready.
-#
-# Quick start:
-#   cp ../.env.example ../.env  # fill in API keys
-#   docker compose up --build
-# ============================================================
+# Usage:
+#   cp .env.example .env   # fill in API keys
+#   docker compose -f docker/docker-compose.yml up --build
 
-networks:
-  policypulse:
-    driver: bridge
-
-# ── Shared env for all Python services ─────────────────────
+# ── Shared env for backend ────────────────────────────────────
 x-backend-env: &backend-env
-  LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+  LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
   OPENAI_API_KEY: ${OPENAI_API_KEY:-}
   ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
   GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-  OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
-  OPENAI_CLASSIFIER_MODEL: ${OPENAI_CLASSIFIER_MODEL:-gpt-4o-mini}
-  ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-6}
-  ANTHROPIC_CLASSIFIER_MODEL: ${ANTHROPIC_CLASSIFIER_MODEL:-claude-haiku-4-5-20251001}
-  GOOGLE_MODEL: ${GOOGLE_MODEL:-gemini-2.0-flash}
-  GOOGLE_CLASSIFIER_MODEL: ${GOOGLE_CLASSIFIER_MODEL:-gemini-2.0-flash}
   FRED_API_KEY: ${FRED_API_KEY:-}
   BLS_API_KEY: ${BLS_API_KEY:-}
   BEA_API_KEY: ${BEA_API_KEY:-}
@@ -41,39 +22,29 @@ x-backend-env: &backend-env
 
 services:
 
-  # ── Backend (FastAPI) ────────────────────────────────────
+  # ── Backend (FastAPI) ───────────────────────────────────────
   backend:
     build:
       context: ..
       dockerfile: docker/Dockerfile.backend
     container_name: policypulse-backend
-    networks:
-      - policypulse
-    volumes:
-      - ../backend:/app/backend   # hot-reload in dev
     ports:
       - "8000:8000"
+    volumes:
+      - ../backend:/app/backend
     environment:
       <<: *backend-env
       ENVIRONMENT: ${ENVIRONMENT:-development}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    # TODO (Praneeth): add depends_on: aperture once Lightning layer is wired
 
-  # ── Frontend ─────────────────────────────────────────────
+  # ── Frontend (Next.js) ──────────────────────────────────────
   frontend:
     build:
       context: ..
       dockerfile: docker/Dockerfile.frontend
     container_name: policypulse-frontend
-    networks:
-      - policypulse
     depends_on:
       - backend
-    volumes:
-      - ../frontend:/app/frontend
-      - /app/frontend/node_modules
     ports:
       - "3000:3000"
     environment:
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
-    # TODO (Samank): update entrypoint once frontend framework is confirmed
+      NEXT_PUBLIC_API_URL: http://localhost:8000
