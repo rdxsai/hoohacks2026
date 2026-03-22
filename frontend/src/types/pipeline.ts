@@ -278,6 +278,7 @@ export interface SynthesisReport {
     for_small_business: string;
     biggest_uncertainty: string;
   };
+  sankey_data?: SankeyData;
 }
 
 export interface ClassifierCompleteEvent {
