@@ -42,7 +42,8 @@ SEARCH_STRATEGIES: dict[str, list[dict[str, Any]]] = {
         {"tool": "web_search_news", "args": {"query": "H-1B visa policy 2026 changes"}},
         {"tool": "search_cbo_reports", "args": {"query": "immigration skilled workers economic impact"}},
     ],
-    "education_finance": [
+    # Keys match PolicyTaskType enum values from backend/agents/schemas.py
+    "education": [
         {"tool": "fred_search", "args": {"query": "student loan debt"}},
         {"tool": "fred_get_series", "args": {"series_id": "SLOAS"}},  # student loans outstanding
         {"tool": "fred_get_series", "args": {"series_id": "UNRATE"}},
@@ -50,13 +51,22 @@ SEARCH_STRATEGIES: dict[str, list[dict[str, Any]]] = {
         {"tool": "web_search_news", "args": {"query": "student loan forgiveness plan 2026"}},
         {"tool": "search_cbo_reports", "args": {"query": "student loan forgiveness cost federal budget"}},
     ],
-    "trade": [
+    "trade_tariff": [
         {"tool": "fred_search", "args": {"query": "tariff electronics imports China"}},
         {"tool": "fred_get_series", "args": {"series_id": "BOPGSTB"}},  # trade balance
         {"tool": "fred_get_series", "args": {"series_id": "PCUOMFG"}},  # PPI manufacturing
         {"tool": "bls_get_data", "args": {"series_ids": ["CUUR0000SA0"]}},  # CPI-U
         {"tool": "search_academic_papers", "args": {"query": "tariff consumer prices small business impact"}},
         {"tool": "web_search_news", "args": {"query": "China electronics tariff 2026 impact"}},
+    ],
+    "minimum_wage": [
+        {"tool": "fred_get_series", "args": {"series_id": "FEDMINNFRWG"}},  # federal minimum wage
+        {"tool": "fred_get_series", "args": {"series_id": "UNRATE"}},  # unemployment rate
+        {"tool": "fred_get_series", "args": {"series_id": "LES1252881600Q"}},  # median usual weekly earnings
+        {"tool": "bls_get_data", "args": {"series_ids": ["CES0500000003"]}},  # avg hourly earnings
+        {"tool": "search_academic_papers", "args": {"query": "minimum wage employment effect small business"}},
+        {"tool": "web_search_news", "args": {"query": "minimum wage increase 2026 economic impact"}},
+        {"tool": "search_cbo_reports", "args": {"query": "minimum wage employment economic effects"}},
     ],
 }
 
