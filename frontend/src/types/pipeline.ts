@@ -19,6 +19,8 @@ export interface ToolCallRecord {
   duration_ms: number;
 }
 
+export type AgentMode = "agentic" | "single_shot";
+
 export interface SectorReport {
   sector: "labor" | "housing" | "consumer" | "business";
   direct_effects: CausalClaim[];
@@ -27,6 +29,7 @@ export interface SectorReport {
   cross_sector_dependencies: string[];
   dissent: string | null;
   tool_calls_made: ToolCallRecord[];
+  agent_mode: AgentMode;
 }
 
 export type ChallengeType =
@@ -155,7 +158,7 @@ export interface LightningPaymentEvent {
 
 export interface SectorAgentStartedEvent {
   type: "sector_agent_started";
-  data: { agent: string };
+  data: { agent: string; agent_mode?: AgentMode };
   timestamp: string;
 }
 
@@ -168,6 +171,29 @@ export interface SectorAgentToolCallEvent {
 export interface SectorAgentCompleteEvent {
   type: "sector_agent_complete";
   data: { agent: string; report: SectorReport };
+  timestamp: string;
+}
+
+export type ThinkingStepType = "phase_start" | "tool_call" | "tool_result" | "reasoning" | "reasoning_chunk" | "phase_complete";
+
+export interface ThinkingStep {
+  id: number;
+  stepType: ThinkingStepType;
+  content: string;
+  phase: string;
+  tool?: string;
+  timestamp: number;
+}
+
+export interface SectorAgentThinkingEvent {
+  type: "sector_agent_thinking";
+  data: {
+    agent: string;
+    step_type: ThinkingStepType;
+    content: string;
+    phase?: string;
+    tool?: string;
+  };
   timestamp: string;
 }
 
@@ -227,6 +253,7 @@ export type PipelineEvent =
   | SectorAgentStartedEvent
   | SectorAgentToolCallEvent
   | SectorAgentCompleteEvent
+  | SectorAgentThinkingEvent
   | DebateChallengeEvent
   | RevisionCompleteEvent
   | SynthesisCompleteEvent
@@ -250,6 +277,13 @@ export interface PipelineState {
       status: "pending" | "running" | "complete";
       toolCalls: SectorAgentToolCallEvent["data"][];
       report: SectorReport | null;
+      agentMode: AgentMode | null;
+      /** Current LangGraph phase (1-5) for agentic agents, null for single-shot */
+      currentPhase: string | null;
+      /** Human-readable description of current phase */
+      phaseLabel: string | null;
+      /** Live thinking feed from LangGraph agent */
+      thinkingSteps: ThinkingStep[];
     }
   >;
   synthesis: SynthesisReport | null;
