@@ -198,8 +198,8 @@ export default function SankeyDiagram({ data, height = 320 }: SankeyDiagramProps
   }, [graph, height, innerWidth, margin.left, margin.top, width]);
 
   return (
-    <div ref={containerRef} className="relative w-full overflow-x-auto">
-      <svg ref={svgRef} className="w-full" style={{ height }} role="img" aria-label="Economic impact Sankey diagram" />
+    <div ref={containerRef} className="relative w-full overflow-visible">
+      <svg ref={svgRef} className="w-full" style={{ height, overflow: "visible" }} role="img" aria-label="Economic impact Sankey diagram" />
       {tooltip.visible && (
         <div
           className="pointer-events-none absolute z-20 rounded border border-white/15 bg-black/85 px-2 py-1 text-[11px] text-white/75"

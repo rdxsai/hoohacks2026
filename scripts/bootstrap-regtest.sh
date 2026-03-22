@@ -103,6 +103,23 @@ sleep 2
 
 BUYER_BALANCE=$($LNCLI_BUYER walletbalance | jq -r '.confirmed_balance')
 echo "  Balance: $BUYER_BALANCE sats"
+
+# Wait for BOTH nodes to re-sync after mining 101 blocks
+echo "  Waiting for nodes to sync new blocks..."
+SYNC_RETRIES=60
+while [ $SYNC_RETRIES -gt 0 ]; do
+    BUYER_SYNCED=$($LNCLI_BUYER getinfo 2>/dev/null | jq -r '.synced_to_chain // "false"')
+    SELLER_SYNCED=$($LNCLI_SELLER getinfo 2>/dev/null | jq -r '.synced_to_chain // "false"')
+    if [ "$BUYER_SYNCED" = "true" ] && [ "$SELLER_SYNCED" = "true" ]; then
+        echo "  Both nodes synced to chain"
+        break
+    fi
+    sleep 2
+    SYNC_RETRIES=$((SYNC_RETRIES - 1))
+done
+if [ $SYNC_RETRIES -eq 0 ]; then
+    echo "  WARNING: Nodes may not be fully synced, continuing anyway..."
+fi
 echo ""
 
 # ---------------------------------------------------------------------------
@@ -112,17 +129,19 @@ echo "[3/7] Connecting buyer to seller..."
 SELLER_PUBKEY=$($LNCLI_SELLER getinfo | jq -r '.identity_pubkey')
 echo "  Seller pubkey: ${SELLER_PUBKEY:0:20}..."
 
-# Retry connect — server may still be initializing subsystems
-CONNECT_RETRIES=10
+# Retry connect — server may still be initializing subsystems after mining
+CONNECT_RETRIES=20
 while [ $CONNECT_RETRIES -gt 0 ]; do
-    if $LNCLI_BUYER connect "${SELLER_PUBKEY}@litd-seller:9735" 2>/dev/null; then
-        break
-    fi
     ERR=$($LNCLI_BUYER connect "${SELLER_PUBKEY}@litd-seller:9735" 2>&1 || true)
     if echo "$ERR" | grep -q "already connected"; then break; fi
-    echo "  Waiting for buyer to accept connections... ($CONNECT_RETRIES retries left)"
-    sleep 3
-    CONNECT_RETRIES=$((CONNECT_RETRIES - 1))
+    if echo "$ERR" | grep -qi "error\|starting\|unavailable"; then
+        echo "  Waiting for buyer to accept connections... ($CONNECT_RETRIES retries left)"
+        sleep 3
+        CONNECT_RETRIES=$((CONNECT_RETRIES - 1))
+    else
+        # Success or unexpected output — either way, move on
+        break
+    fi
 done
 echo "  Connected"
 echo ""
@@ -132,23 +151,39 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "[4/7] Opening channel (${CHANNEL_SIZE} sats)..."
 
-# Retry openchannel — server may still be starting
-OPEN_RETRIES=10
+# Retry openchannel — server may still be starting or re-syncing
+OPEN_RETRIES=20
+CHANNEL_OPENED=false
 while [ $OPEN_RETRIES -gt 0 ]; do
-    RESULT=$($LNCLI_BUYER openchannel --node_key="$SELLER_PUBKEY" --local_amt=$CHANNEL_SIZE 2>&1 | head -1)
+    RESULT=$($LNCLI_BUYER openchannel --node_key="$SELLER_PUBKEY" --local_amt=$CHANNEL_SIZE 2>&1)
     if echo "$RESULT" | grep -q "funding_txid"; then
-        echo "  $RESULT"
+        TXID=$(echo "$RESULT" | jq -r '.funding_txid // empty' 2>/dev/null || echo "$RESULT")
+        echo "  Funding txid: $TXID"
+        CHANNEL_OPENED=true
         break
     fi
-    if echo "$RESULT" | grep -q "still in the process of starting"; then
-        echo "  Server still starting... ($OPEN_RETRIES retries left)"
-        sleep 3
+    if echo "$RESULT" | grep -qi "pending channels exceed"; then
+        echo "  Channel already pending from previous attempt — continuing"
+        CHANNEL_OPENED=true
+        break
+    fi
+    if echo "$RESULT" | grep -qi "starting\|unavailable\|not connected\|syncing"; then
+        echo "  Waiting for channel open readiness... ($OPEN_RETRIES retries left)"
+        sleep 5
         OPEN_RETRIES=$((OPEN_RETRIES - 1))
     else
-        echo "  $RESULT"
-        break
+        echo "  Unexpected: $RESULT"
+        echo "  Retrying... ($OPEN_RETRIES retries left)"
+        sleep 3
+        OPEN_RETRIES=$((OPEN_RETRIES - 1))
     fi
 done
+
+if [ "$CHANNEL_OPENED" != "true" ]; then
+    echo "  ERROR: Failed to open channel after all retries"
+    echo "  Last result: $RESULT"
+    exit 1
+fi
 echo ""
 
 # ---------------------------------------------------------------------------

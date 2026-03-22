@@ -71,7 +71,8 @@ async def _gemini(
     if json_mode:
         payload["generationConfig"]["responseMimeType"] = "application/json"
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    # Gemini 2.5 Flash uses thinking by default — needs longer timeout
+    async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             url,
             params={"key": settings.google_api_key},
@@ -79,7 +80,16 @@ async def _gemini(
         )
         resp.raise_for_status()
         data = resp.json()
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+        # Gemini 2.5 Flash (thinking model) returns multiple parts:
+        # parts[0] may be a "thought" part, actual content is the last "text" part.
+        parts = data["candidates"][0]["content"]["parts"]
+        # Find the last part that has "text" (skip "thought" parts)
+        for part in reversed(parts):
+            if "text" in part:
+                return part["text"]
+        # Fallback: return whatever is in parts[0]
+        return parts[0].get("text", json.dumps(parts[0]))
 
 
 async def _openai(
@@ -99,7 +109,7 @@ async def _openai(
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             url,
             headers={"Authorization": f"Bearer {settings.openai_api_key}"},
@@ -119,7 +129,7 @@ async def _anthropic(
     if json_mode:
         system += "\n\nYou MUST respond with valid JSON only. No other text."
 
-    async with httpx.AsyncClient(timeout=60) as client:
+    async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             url,
             headers={

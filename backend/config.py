@@ -61,14 +61,11 @@ class Settings(BaseSettings):
     debug: bool = True
     cors_origins: list[str] = ["http://localhost:3000"]
 
-    # LLM settings
-    gemini_api_key: Optional[str] = Field(None, description="Google Gemini API key")
-    openai_api_key: Optional[str] = Field(None, description="OpenAI API key")
-    anthropic_api_key: Optional[str] = Field(None, description="Anthropic API key")
+    # LLM routing (gemini_api_key is an alias for google_api_key, used by ADK classifier)
+    gemini_api_key: Optional[str] = Field(None, description="Google Gemini API key (alias)")
     llm_provider: str = Field("gemini", description="LLM provider: gemini, openai, or anthropic")
     llm_model_name: str = Field("gemini-2.5-flash", description="LLM model name")
     # Stage 0 classifier uses a cheap/fast model — separate from the main pipeline model.
-    # Google ADK defaults to Gemini, so this only applies when llm_provider == "gemini".
     classifier_model_name: str = Field("gemini-2.5-flash", description="Fast model for Stage 0 ADK Classifier")
 
 

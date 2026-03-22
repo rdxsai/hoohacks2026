@@ -103,18 +103,33 @@ async def run_classifier(state: PipelineState, emit: EventCallback) -> PipelineS
 
     result = None
 
-    # Try LLM classification first
+    # Try ADK Classifier first (Rudra's Google ADK agent — richer extraction)
     try:
-        raw = await llm_chat(
-            system_prompt=CLASSIFIER_SYSTEM,
-            user_prompt=f"Policy question: {state.query}\n\nUser context: {json.dumps(state.user_context)}",
-            json_mode=True,
-            fast=True,
-        )
-        if raw:
-            result = parse_json_response(raw)
+        from backend.agents.classifier import run_classifier as adk_classify
+        adk_output = await adk_classify(state.query)
+        if adk_output and adk_output.confidence != "low":
+            result = {
+                "policy_type": adk_output.task_type.value if hasattr(adk_output.task_type, "value") else str(adk_output.task_type),
+                "policy_name": adk_output.cleaned_query or state.query,
+                "parameters": adk_output.policy_params or {},
+                "affected_populations": [],
+            }
     except Exception:
         pass
+
+    # Fall back to direct LLM classification
+    if not result:
+        try:
+            raw = await llm_chat(
+                system_prompt=CLASSIFIER_SYSTEM,
+                user_prompt=f"Policy question: {state.query}\n\nUser context: {json.dumps(state.user_context)}",
+                json_mode=True,
+                fast=True,
+            )
+            if raw:
+                result = parse_json_response(raw)
+        except Exception:
+            pass
 
     # Fall back to keyword matching
     if not result:

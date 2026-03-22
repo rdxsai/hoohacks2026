@@ -382,7 +382,8 @@ def _parse_sector_report(sector: str, raw: str, tool_records: list[ToolCallRecor
     """Parse LLM JSON output into a SectorReport."""
     try:
         data = parse_json_response(raw)
-    except Exception:
+    except Exception as e:
+        logger.error(f"Sector {sector}: JSON parse failed: {e}, raw[:500]={raw[:500]}")
         return SectorReport(sector=sector)
 
     def _to_list(val: Any) -> list[str]:
@@ -461,6 +462,7 @@ async def _run_one_sector(
     # Step 3: LLM analysis
     report: SectorReport
     try:
+        logger.info(f"Sector {sector}: calling LLM with {len(user_prompt)} char prompt...")
         raw = await llm_chat(
             system_prompt=SECTOR_PROMPTS[sector],
             user_prompt=user_prompt,
@@ -469,8 +471,12 @@ async def _run_one_sector(
             max_tokens=8000,
         )
         if raw:
+            logger.info(f"Sector {sector}: LLM returned {len(raw)} chars")
             report = _parse_sector_report(sector, raw, tool_records)
+            if not report.direct_effects:
+                logger.warning(f"Sector {sector}: parsed report has 0 direct_effects, raw[:500]={raw[:500]}")
         else:
+            logger.warning(f"Sector {sector}: LLM returned None (no API key configured?)")
             report = _fallback_report(sector, state)
     except Exception:
         logger.error(f"Sector {sector} LLM failed: {traceback.format_exc()}")
