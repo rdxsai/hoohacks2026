@@ -18,7 +18,6 @@
   --blue-theoretical: #60a5fa;
   --blue-dim: #1d4ed8;
   --amber-speculative: #fbbf24;
-  --red-debate: #f87171;
   --red-dim: #7f1d1d;
   --fun-cyan: #4dd9ff;
   --fun-azure: #60a5fa;
@@ -120,17 +119,6 @@ html::before {
   }
 }
 
-@keyframes slideRightIn {
-  from {
-    opacity: 0;
-    transform: translateX(12px);
-  }
-  to {
-    opacity: 1;
-    transform: translateX(0);
-  }
-}
-
 @keyframes oncePulse {
   0% {
     box-shadow: 0 0 0 0 rgba(251, 191, 36, 0.65);
@@ -209,10 +197,6 @@ html::before {
   animation: slideFadeIn 300ms ease-out;
 }
 
-.debate-enter {
-  animation: slideRightIn 300ms ease-out;
-}
-
 .lightning-flash {
   animation: oncePulse 600ms ease-out 1;
 }
@@ -240,6 +224,21 @@ html::before {
   backdrop-filter: blur(10px);
 }
 
+@keyframes tickerIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-ticker-in {
+  animation: tickerIn 250ms ease-out;
+}
+
 .no-scrollbar {
   -ms-overflow-style: none;
   scrollbar-width: none;
@@ -247,4 +246,20 @@ html::before {
 
 .no-scrollbar::-webkit-scrollbar {
   display: none;
+}
+
+/* Spotlight stream entry — animation plays once via React key stability */
+.spotlight-entry {
+  animation: spotlightIn 300ms ease-out both;
+}
+
+@keyframes spotlightIn {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }

@@ -34,8 +34,6 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Awaitable
 
 from backend.models.pipeline import (
-    AgentChallenge,
-    AgentRebuttal,
     SectorReport,
     SynthesisReport,
 )
@@ -67,11 +65,7 @@ class PipelineState:
     # Stage 2 output
     sector_reports: list[SectorReport] = field(default_factory=list)
 
-    # Stage 3 output (debate)
-    challenges: list[AgentChallenge] = field(default_factory=list)
-    rebuttals: list[AgentRebuttal] = field(default_factory=list)
-
-    # Stage 4 output (synthesis)
+    # Stage 3 output (synthesis)
     synthesis: SynthesisReport | None = None
 
     # Timing
@@ -110,7 +104,6 @@ async def run_pipeline(
     from backend.pipeline.classifier import run_classifier
     from backend.pipeline.analyst import run_analyst
     from backend.pipeline.sector import run_sector_agents
-    from backend.pipeline.debate import run_debate
     from backend.pipeline.synthesis import run_synthesis
 
     try:
@@ -134,15 +127,10 @@ async def run_pipeline(
         state = await run_sector_agents(state, _emit)
         state.stage_times["sector"] = time.time() - t2
 
-        # Stage 3: Debate (adversarial challenge + rebuttal)
+        # Stage 3: Synthesis
         t3 = time.time()
-        state = await run_debate(state, _emit)
-        state.stage_times["debate"] = time.time() - t3
-
-        # Stage 4: Synthesis
-        t4 = time.time()
         state = await run_synthesis(state, _emit)
-        state.stage_times["synthesis"] = time.time() - t4
+        state.stage_times["synthesis"] = time.time() - t3
 
         total = time.time() - state.start_time
         state.stage_times["total"] = total
@@ -168,6 +156,9 @@ async def run_pipeline(
 
 async def _run_premium(state: PipelineState, emit: EventCallback) -> PipelineState:
     """Stage 1.5: Premium data via L402 Lightning payments."""
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         from backend.lightning.premium_agent import PremiumDataAgent
 
@@ -179,8 +170,13 @@ async def _run_premium(state: PipelineState, emit: EventCallback) -> PipelineSta
         if state.premium_data:
             state.briefing["premium_data"] = state.premium_data
         await agent.close()
+        logger.info(
+            f"Premium stage complete: {len(state.payments)} payments, "
+            f"{len(state.premium_data)} data sources"
+        )
     except Exception as e:
         # Lightning is optional — if it fails, pipeline continues
+        logger.error(f"Premium stage failed: {e}", exc_info=True)
         await emit({
             "type": "agent_result",
             "agent": "premium",
@@ -193,8 +189,6 @@ def _current_stage(state: PipelineState) -> str:
     """Determine which stage we're in based on what's populated."""
     if state.synthesis:
         return "synthesis"
-    if state.challenges:
-        return "debate"
     if state.sector_reports:
         return "sector"
     if state.briefing:
