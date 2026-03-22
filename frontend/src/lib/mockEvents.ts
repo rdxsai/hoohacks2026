@@ -73,6 +73,7 @@ const laborReport: SectorReport = {
       duration_ms: 820,
     },
   ],
+  agent_mode: "single_shot",
 };
 
 const housingReport: SectorReport = {
@@ -104,6 +105,7 @@ const housingReport: SectorReport = {
       duration_ms: 910,
     },
   ],
+  agent_mode: "agentic",
 };
 
 const consumerReport: SectorReport = {
@@ -142,6 +144,7 @@ const consumerReport: SectorReport = {
       duration_ms: 760,
     },
   ],
+  agent_mode: "agentic",
 };
 
 const businessReport: SectorReport = {
@@ -187,6 +190,7 @@ const businessReport: SectorReport = {
       duration_ms: 990,
     },
   ],
+  agent_mode: "single_shot",
 };
 
 const burdenChallenge: AgentChallenge = {
@@ -643,7 +647,7 @@ export function buildMockTimeline(query: string): TimedPipelineEvent[] {
   ["Labor", "Housing", "Consumer", "Business"].forEach((agent) => {
     events.push({
       delayMs: 9800,
-      event: mkEvent("sector_agent_started", { agent }),
+      event: mkEvent("sector_agent_started", { agent, agent_mode: (agent === "Housing" || agent === "Consumer") ? "agentic" : "single_shot" }),
     });
   });
 
@@ -654,30 +658,116 @@ export function buildMockTimeline(query: string): TimedPipelineEvent[] {
     });
   });
 
+  // --- Mock thinking events for agentic agents (Housing & Consumer) ---
+  const housingThinking: Array<{ delayMs: number; step_type: string; content: string; phase?: string; tool?: string }> = [
+    { delayMs: 10200, step_type: "phase_start", content: "Phase 1: Gathering baseline housing data for tech metros", phase: "1" },
+    { delayMs: 10800, step_type: "tool_call", content: "Querying FRED for SF, Seattle, Austin rent time series", phase: "1", tool: "fred_get_series" },
+    { delayMs: 11400, step_type: "tool_result", content: "Retrieved 36 months of rent data across 3 metros — SF median rent $3,450, Seattle $2,180", phase: "1", tool: "fred_get_series" },
+    { delayMs: 11900, step_type: "reasoning", content: "SF rents already softened 4.2% since 2024 peak. Tech layoffs explain ~60% of that decline based on metro employment correlation.", phase: "1" },
+    { delayMs: 12500, step_type: "phase_complete", content: "Baseline data collection complete", phase: "1" },
+    { delayMs: 12800, step_type: "phase_start", content: "Phase 2: Modeling demand shock from reduced tech compensation", phase: "2" },
+    { delayMs: 13400, step_type: "tool_call", content: "Searching academic papers on corporate tax incidence and housing markets", phase: "2", tool: "search_academic_papers" },
+    { delayMs: 14000, step_type: "tool_result", content: "Found 4 relevant papers — key finding: 1pp corporate tax increase → 0.3-0.5% rent decline in concentrated metros", phase: "2", tool: "search_academic_papers" },
+    { delayMs: 14600, step_type: "reasoning", content: "Applying elasticity: 30% tax increase on ~$2.1T revenue → estimated 0.5-1.5% sustained rent softening in SF/Seattle. Austin less affected due to diversified employer base.", phase: "2" },
+    { delayMs: 15200, step_type: "phase_complete", content: "Demand modeling complete", phase: "2" },
+    { delayMs: 15400, step_type: "tool_call", content: "Free sources insufficient for rent-regulation precedent data — initiating L402 micropayment to premium-legal-db", phase: "2", tool: "l402_fetch" },
+    { delayMs: 15900, step_type: "tool_result", content: "L402 payment complete (10 sats) — received housing regulation impact assessments and rent-control precedent data", phase: "2", tool: "l402_fetch" },
+    { delayMs: 16200, step_type: "phase_start", content: "Phase 3: Analyzing sentiment vs fundamental decomposition", phase: "3" },
+    { delayMs: 16800, step_type: "reasoning", content: "Historical pattern: 2022-2023 tech layoffs caused 6-8% rent dip in SF but 40% rebounded within 6 months. Need to separate transient sentiment from structural demand shift.", phase: "3" },
+    { delayMs: 17200, step_type: "reasoning", content: "Premium legal data confirms: rent-regulation precedents in SF show policy-driven declines of 0.8-2.1% in tech corridors, aligning with our elasticity estimates.", phase: "3" },
+    { delayMs: 17600, step_type: "phase_complete", content: "Sentiment decomposition complete", phase: "3" },
+    { delayMs: 17900, step_type: "phase_start", content: "Phase 4: Cross-sector dependency analysis", phase: "4" },
+    { delayMs: 18400, step_type: "reasoning", content: "Housing impact depends on labor agent's employment estimates and consumer agent's spending patterns. If AI hiring offsets layoffs, housing impact could be near zero.", phase: "4" },
+    { delayMs: 18900, step_type: "phase_complete", content: "Cross-sector analysis complete", phase: "4" },
+    { delayMs: 19200, step_type: "phase_start", content: "Phase 5: Synthesizing housing sector report", phase: "5" },
+    { delayMs: 19600, step_type: "reasoning", content: "Finalizing: sustained rent softening 0.5-1.5% in SF/Seattle, transient sentiment dip of 1-2% in first 3-6 months. Austin insulated. Confidence: THEORETICAL.", phase: "5" },
+    { delayMs: 19800, step_type: "phase_complete", content: "Housing report synthesized", phase: "5" },
+  ];
+
+  housingThinking.forEach(({ delayMs, step_type, content, phase, tool }) => {
+    events.push({
+      delayMs,
+      event: mkEvent("sector_agent_thinking", { agent: "Housing", step_type, content, phase, tool } as any),
+    });
+  });
+
+  // Lightning payment triggered by Housing agent's L402 fetch (top-level event for LightningRow)
+  events.push({
+    delayMs: 15500,
+    event: mkEvent("lightning_payment", {
+      service: "premium-legal-db",
+      invoice_amount_sats: 10,
+      status: "paying",
+      macaroon_received: false,
+      payment_hash: "mockhash-housing-l402-001",
+      duration_ms: 0,
+    }),
+  });
+  events.push({
+    delayMs: 15850,
+    event: mkEvent("lightning_payment", {
+      service: "premium-legal-db",
+      invoice_amount_sats: 10,
+      status: "paid",
+      macaroon_received: true,
+      payment_hash: "mockhash-housing-l402-001",
+      duration_ms: 420,
+    }),
+  });
+
+  const consumerThinking: Array<{ delayMs: number; step_type: string; content: string; phase?: string; tool?: string }> = [
+    { delayMs: 10400, step_type: "phase_start", content: "Phase 1: Establishing consumer price baselines", phase: "1" },
+    { delayMs: 11000, step_type: "tool_call", content: "Pulling BLS CPI data for digital services and cloud proxies", phase: "1", tool: "bls_get_series" },
+    { delayMs: 11600, step_type: "tool_result", content: "CPI digital services up 2.1% YoY. Cloud infrastructure costs stable but enterprise software +3.4%", phase: "1", tool: "bls_get_series" },
+    { delayMs: 12100, step_type: "reasoning", content: "Cloud market is oligopolistic (AWS 31%, Azure 25%, GCP 11%). High switching costs support partial pass-through of cost increases.", phase: "1" },
+    { delayMs: 12700, step_type: "phase_complete", content: "Baseline data collection complete", phase: "1" },
+    { delayMs: 13000, step_type: "phase_start", content: "Phase 2: Modeling price pass-through mechanisms", phase: "2" },
+    { delayMs: 13600, step_type: "tool_call", content: "Searching for concentrated-market tax pass-through studies", phase: "2", tool: "search_academic_papers" },
+    { delayMs: 14200, step_type: "tool_result", content: "Baker et al.: oligopoly pass-through rate 40-60% depending on market concentration", phase: "2", tool: "search_academic_papers" },
+    { delayMs: 14800, step_type: "reasoning", content: "Applying Baker et al. framework: 30% tax increase × ~50% pass-through = 0.7-2.0% price increase on cloud/SaaS. Range depends on category concentration.", phase: "2" },
+    { delayMs: 15400, step_type: "phase_complete", content: "Pass-through modeling complete", phase: "2" },
+    { delayMs: 15700, step_type: "phase_start", content: "Phase 3: Estimating household-level impact", phase: "3" },
+    { delayMs: 16300, step_type: "reasoning", content: "Most direct burden lands on enterprise software spend. Household impact modest: ~$25-80/year through indirect subscription cost increases.", phase: "3" },
+    { delayMs: 16900, step_type: "phase_complete", content: "Household impact analysis complete", phase: "3" },
+    { delayMs: 17200, step_type: "phase_start", content: "Phase 4: Feedback loop with labor and business sectors", phase: "4" },
+    { delayMs: 17800, step_type: "reasoning", content: "Key feedback: more successful price pass-through reduces pressure for labor cuts. Price and payroll channels substitute each other in burden distribution.", phase: "4" },
+    { delayMs: 18400, step_type: "phase_complete", content: "Feedback loop analysis complete", phase: "4" },
+    { delayMs: 18700, step_type: "phase_start", content: "Phase 5: Compiling consumer sector report", phase: "5" },
+    { delayMs: 19100, step_type: "reasoning", content: "Final assessment: cloud/SaaS +0.7-2.0%, household cost +$25-80/yr, pass-through collapses if one hyperscaler holds price. Confidence: THEORETICAL.", phase: "5" },
+    { delayMs: 19600, step_type: "phase_complete", content: "Consumer report synthesized", phase: "5" },
+  ];
+
+  consumerThinking.forEach(({ delayMs, step_type, content, phase, tool }) => {
+    events.push({
+      delayMs,
+      event: mkEvent("sector_agent_thinking", { agent: "Consumer", step_type, content, phase, tool } as any),
+    });
+  });
+
   events.push({
     delayMs: 18100,
     event: mkEvent("sector_agent_complete", { agent: "Labor", report: laborReport }),
   });
   events.push({
-    delayMs: 19000,
+    delayMs: 20200,
     event: mkEvent("sector_agent_complete", { agent: "Housing", report: housingReport }),
   });
   events.push({
-    delayMs: 19900,
+    delayMs: 20800,
     event: mkEvent("sector_agent_complete", { agent: "Consumer", report: consumerReport }),
   });
   events.push({
-    delayMs: 20700,
+    delayMs: 21200,
     event: mkEvent("sector_agent_complete", { agent: "Business", report: businessReport }),
   });
 
-  events.push({ delayMs: 21600, event: mkEvent("debate_challenge", { challenge: burdenChallenge }) });
-  events.push({ delayMs: 22100, event: mkEvent("debate_challenge", { challenge: housingChallenge }) });
-  events.push({ delayMs: 22600, event: mkEvent("debate_challenge", { challenge: shiftingChallenge }) });
-  events.push({ delayMs: 23100, event: mkEvent("debate_challenge", { challenge: vendorChallenge }) });
+  events.push({ delayMs: 22200, event: mkEvent("debate_challenge", { challenge: burdenChallenge }) });
+  events.push({ delayMs: 22700, event: mkEvent("debate_challenge", { challenge: housingChallenge }) });
+  events.push({ delayMs: 23200, event: mkEvent("debate_challenge", { challenge: shiftingChallenge }) });
+  events.push({ delayMs: 23700, event: mkEvent("debate_challenge", { challenge: vendorChallenge }) });
 
   events.push({
-    delayMs: 24400,
+    delayMs: 25000,
     event: mkEvent("revision_complete", {
       rebuttal: {
         original_claim: burdenChallenge.target_claim,
@@ -753,7 +843,7 @@ export function buildMockTimeline(query: string): TimedPipelineEvent[] {
   });
 
   events.push({
-    delayMs: 47000,
+    delayMs: 48000,
     event: mkEvent("synthesis_complete", { report: buildSynthesisReport(query || POLICY_TITLE) }),
   });
 
