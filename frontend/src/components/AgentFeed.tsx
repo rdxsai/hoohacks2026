@@ -2,7 +2,7 @@
 
 import LightningRow from "@/components/LightningRow";
 import { cn, formatDuration, titleCase, truncate } from "@/lib/utils";
-import type { AgentChallenge, PipelineState } from "@/types/pipeline";
+import type { PipelineState } from "@/types/pipeline";
 
 interface AgentFeedProps {
   state: PipelineState;
@@ -41,20 +41,17 @@ function StageLabel({
 function Avatar({
   letter,
   status,
-  debate,
 }: {
   letter: string;
   status: "pending" | "running" | "complete";
-  debate?: boolean;
 }) {
   return (
     <div
       className={cn(
         "h-7 w-7 rounded-full grid place-items-center text-[11px] border border-white/10",
-        debate && "bg-red-900/40 text-red-400",
-        !debate && status === "complete" && "bg-green-900/40 text-green-400",
-        !debate && status === "running" && "bg-amber-900/40 text-amber-400 animate-pulse",
-        !debate && status === "pending" && "bg-white/5 text-white/30",
+        status === "complete" && "bg-green-900/40 text-green-400",
+        status === "running" && "bg-amber-900/40 text-amber-400 animate-pulse",
+        status === "pending" && "bg-white/5 text-white/30",
       )}
     >
       {letter}
@@ -67,17 +64,15 @@ function AgentRow({
   status,
   description,
   toolCall,
-  debate,
 }: {
   name: string;
   status: "pending" | "running" | "complete";
   description: string;
   toolCall?: string;
-  debate?: boolean;
 }) {
   return (
     <div className="flex gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3 enter-card">
-      <Avatar letter={name[0] ?? "?"} status={status} debate={debate} />
+      <Avatar letter={name[0] ?? "?"} status={status} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <div className="text-sm font-medium">{name}</div>
@@ -159,10 +154,6 @@ function SectorCard({
   );
 }
 
-function challengeText(challenge: AgentChallenge) {
-  return [challenge.target_claim.claim, ...challenge.counter_evidence].join(" · ");
-}
-
 export default function AgentFeed({ state, onViewReport }: AgentFeedProps) {
   const elapsed = formatDuration(state.elapsedMs);
 
@@ -195,22 +186,9 @@ export default function AgentFeed({ state, onViewReport }: AgentFeedProps) {
       ? "running"
       : "pending";
 
-  const stage3Status: "pending" | "running" | "complete" = state.challenges.length > 0
+  const stage3Status: "pending" | "running" | "complete" = state.synthesis
     ? "complete"
-    : allSectorsComplete && state.status === "running"
-      ? "running"
-      : "pending";
-
-  const stage3bStatus: "pending" | "running" | "complete" =
-    state.rebuttals.length > 0 && state.rebuttals.length >= Math.max(1, state.challenges.length)
-      ? "complete"
-      : state.challenges.length > 0
-        ? "running"
-        : "pending";
-
-  const stage4Status: "pending" | "running" | "complete" = state.synthesis
-    ? "complete"
-    : state.status === "running" && state.rebuttals.length > 0
+    : state.status === "running" && allSectorsComplete
       ? "running"
       : "pending";
 
@@ -275,61 +253,10 @@ export default function AgentFeed({ state, onViewReport }: AgentFeedProps) {
           })}
         </div>
 
-        <StageLabel status={stage3Status}>Stage 3 - Debate</StageLabel>
-        {state.challenges.length === 0 && (
-          <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs text-white/45">No challenges yet.</div>
-        )}
-
-        <div className="space-y-2">
-          {state.challenges.map((challenge, index) => {
-            const rebuttal = state.rebuttals.find(
-              (item) =>
-                item.challenge.target_agent === challenge.target_agent &&
-                item.challenge.target_claim.claim === challenge.target_claim.claim,
-            );
-
-            return (
-              <article
-                key={`${challenge.target_agent}-${challenge.target_claim.claim}-${index}`}
-                className="debate-enter rounded-lg border border-red-500/25 border-l-2 bg-red-950/10 p-3"
-                style={{ animationDelay: `${index * 50}ms` }}
-              >
-                <div className="flex items-center gap-2 text-sm text-red-200">
-                  <Avatar letter="!" status="running" debate />
-                  <span>Debate → {challenge.target_agent}</span>
-                  <span className="text-[11px] italic text-red-300/70">{challenge.challenge_type}</span>
-                </div>
-                <p className="mt-2 text-xs text-red-100/75">{truncate(challengeText(challenge), 200)}</p>
-
-                {rebuttal && (
-                  <div className="mt-2 flex items-start gap-2 border-t border-red-500/20 pt-2 text-xs text-white/70">
-                    <span
-                      className={cn(
-                        "rounded-full border px-2 py-0.5 text-[10px]",
-                        rebuttal.response === "concede" && "border-red-500/30 bg-red-900/40 text-red-300",
-                        rebuttal.response === "defend" && "border-blue-500/30 bg-blue-900/40 text-blue-300",
-                        rebuttal.response === "revise" && "border-green-500/30 bg-green-900/40 text-green-300",
-                      )}
-                    >
-                      {rebuttal.response}
-                    </span>
-                    <div>{rebuttal.revised_claim?.claim ?? rebuttal.original_claim.claim}</div>
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
-
-        <StageLabel status={stage3bStatus}>Stage 3b - Agent revisions</StageLabel>
-        <div className="rounded-lg border border-white/10 bg-white/[0.02] p-3 text-xs text-white/65">
-          {state.rebuttals.length === 0 ? "No revisions submitted yet." : `${state.rebuttals.length} revision responses posted.`}
-        </div>
-
-        <StageLabel status={stage4Status}>Stage 4 - Synthesis</StageLabel>
+        <StageLabel status={stage3Status}>Stage 3 - Synthesis</StageLabel>
         <AgentRow
           name="Synthesis agent"
-          status={state.synthesis ? "complete" : state.status === "running" ? "running" : "pending"}
+          status={state.synthesis ? "complete" : state.status === "running" && allSectorsComplete ? "running" : "pending"}
           description={state.synthesis ? "Unified report ready" : "Building final synthesis report"}
         />
 

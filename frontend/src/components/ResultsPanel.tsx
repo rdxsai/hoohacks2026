@@ -31,18 +31,6 @@ function statusText(status: SynthesisReport["impact_dashboard"][number]["status"
   return "Trade-off";
 }
 
-function survivedChipClass(value: SynthesisReport["impact_dashboard"][number]["survived_challenge"]) {
-  if (value === "yes") return "border-green-500/25 bg-green-900/30 text-green-300";
-  if (value === "no") return "border-red-500/25 bg-red-900/30 text-red-300";
-  return "border-amber-500/25 bg-amber-900/30 text-amber-300";
-}
-
-function survivedLabel(value: SynthesisReport["impact_dashboard"][number]["survived_challenge"]) {
-  if (value === "yes") return "Survived challenge";
-  if (value === "no") return "Did not survive";
-  return "Partially survived";
-}
-
 function SectorPill({ sector }: { sector: SynthesisReport["impact_dashboard"][number]["sectors"][number] }) {
   const className =
     sector === "labor"
@@ -180,7 +168,7 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
         <p className="mt-3 text-sm leading-6 text-white/75">{report.unified_impact.summary}</p>
         <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-[var(--fun-cyan)]/35 bg-[var(--fun-cyan)]/10 px-3 py-1 text-[11px] text-[var(--fun-cyan)]">
           <span className="sparkle-dot h-1.5 w-1.5 rounded-full bg-[var(--fun-cyan)]" />
-          Simulation output from 7-agent workflow
+          Simulation output from 6-agent workflow
         </div>
       </article>
 
@@ -214,7 +202,6 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
                   <th className="px-4 py-2.5">Direction</th>
                   <th className="px-4 py-2.5">Magnitude</th>
                   <th className="px-4 py-2.5">Confidence</th>
-                  <th className="px-4 py-2.5">Challenge</th>
                   <th className="px-4 py-2.5">Sectors</th>
                 </tr>
               </thead>
@@ -231,11 +218,6 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
                     <td className="px-4 py-3 text-white/85">{row.magnitude}</td>
                     <td className="px-4 py-3">
                       <ConfidencePill confidence={row.confidence} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={cn("rounded-full border px-2 py-0.5 text-[10px] whitespace-nowrap", survivedChipClass(row.survived_challenge))}>
-                        {survivedLabel(row.survived_challenge)}
-                      </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1.5">
@@ -271,11 +253,6 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
           >
             <div className="mb-1 flex flex-wrap items-center gap-2 text-[11px]">
               <ConfidencePill confidence={claim.confidence} />
-              {claim.survived_debate && (
-                <span className="rounded-full border border-green-500/25 bg-green-900/30 px-2 py-0.5 text-green-300">
-                  survived debate
-                </span>
-              )}
               <span className="text-white/40">model claim</span>
             </div>
 

@@ -21,8 +21,6 @@ const initialState: PipelineState = {
   analystComplete: null,
   lightningPayments: [],
   sectorAgents: buildInitialSectorAgents(),
-  challenges: [],
-  rebuttals: [],
   synthesis: null,
   error: null,
 };
@@ -73,9 +71,9 @@ function applyEvent(state: PipelineState, event: PipelineEvent): PipelineState {
         report: event.data.report,
       }));
     case "debate_challenge":
-      return { ...state, challenges: [...state.challenges, event.data.challenge] };
     case "revision_complete":
-      return { ...state, rebuttals: [...state.rebuttals, event.data.rebuttal] };
+      // Debate removed — ignore legacy events gracefully
+      return state;
     case "synthesis_complete":
       return { ...state, status: "complete", synthesis: event.data.report };
     case "pipeline_complete":

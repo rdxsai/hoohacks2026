@@ -252,8 +252,6 @@ export interface PipelineState {
       report: SectorReport | null;
     }
   >;
-  challenges: AgentChallenge[];
-  rebuttals: AgentRebuttal[];
   synthesis: SynthesisReport | null;
   error: string | null;
 }
