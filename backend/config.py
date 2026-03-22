@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = Field(None, description="Google Gemini API key")
     llm_provider: str = Field("gemini", description="LLM provider: gemini, openai, or anthropic")
     llm_model_name: str = Field("gemini-3-flash-preview", description="LLM model name")
-    classifier_model_name: str = Field("gemini-2.5-flash", description="Fast model for Stage 0 ADK Classifier")
+    classifier_model_name: str = Field("gemini-3-flash-preview", description="Fast model for Stage 0 ADK Classifier")
 
 
 settings = Settings()
