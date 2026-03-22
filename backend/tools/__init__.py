@@ -6,6 +6,10 @@ from backend.tools.search_openalex import search_openalex
 from backend.tools.search_cbo_reports import search_cbo_reports
 from backend.tools.web_search_news import web_search_news
 from backend.tools.fetch_document_text import fetch_document_text
+from backend.tools.census_acs_query import census_acs_query
+from backend.tools.bea_regional_data import bea_regional_data
+from backend.tools.hud_data import hud_data
+from backend.tools.code_execute import code_execute
 
 __all__ = [
     "fred_search",
@@ -16,4 +20,8 @@ __all__ = [
     "search_cbo_reports",
     "web_search_news",
     "fetch_document_text",
+    "census_acs_query",
+    "bea_regional_data",
+    "hud_data",
+    "code_execute",
 ]

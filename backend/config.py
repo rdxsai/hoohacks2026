@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Optional
 
@@ -14,11 +13,15 @@ _ENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 class Settings(BaseSettings):
     model_config = {"env_file": str(_ENV_PATH), "env_file_encoding": "utf-8"}
 
-    fred_api_key: str = Field(..., description="FRED API key")
+    # Data APIs
+    fred_api_key: str = Field("", description="FRED API key")
     bls_api_key: Optional[str] = Field(None, description="BLS API key (optional)")
-    tavily_api_key: str = Field(..., description="Tavily API key")
+    tavily_api_key: str = Field("", description="Tavily API key")
     semantic_scholar_key: Optional[str] = Field(None, description="Semantic Scholar API key (optional)")
     openalex_email: str = Field("policypulse@hoohacks.io", description="Email for OpenAlex polite pool")
+    census_api_key: str = ""
+    bea_data_api: str = ""
+    hud_data_api: str = ""
 
     # LLM settings
     gemini_api_key: Optional[str] = Field(None, description="Google Gemini API key")
