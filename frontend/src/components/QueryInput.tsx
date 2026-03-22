@@ -19,7 +19,7 @@ export default function QueryInput({ onSubmit }: QueryInputProps) {
   const [query, setQuery] = useState(
     "Implement a 30% corporate tax increase on tech companies with revenue over $50B",
   );
-  const canRun = query.trim().length > 0;
+  const canRun = query.trim().length >= 10;
 
   const submit = () => {
     if (!canRun) {
@@ -30,6 +30,14 @@ export default function QueryInput({ onSubmit }: QueryInputProps) {
 
   return (
     <section className="relative min-h-screen w-full grid place-items-center px-4 py-10 sm:px-8 sm:py-12">
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute right-[8%] bottom-[8%] h-44 w-44 rounded-full"
+        style={{
+          background: "radial-gradient(circle, rgba(168,85,247,0.16) 0%, rgba(168,85,247,0.06) 45%, rgba(168,85,247,0) 75%)",
+          filter: "blur(10px)",
+        }}
+      />
       <div className="pointer-events-none absolute left-6 top-8 hidden rounded-full border border-[var(--fun-cyan)]/40 bg-[var(--fun-cyan)]/10 px-3 py-1 text-xs text-[var(--fun-cyan)] md:block">
         Simulation Mode
       </div>
@@ -42,7 +50,7 @@ export default function QueryInput({ onSubmit }: QueryInputProps) {
             <BoltIcon />
           </span>
           <span className="tracking-tight text-[40px] leading-none font-semibold text-[var(--text-primary)]" style={{ fontFamily: "var(--font-wordmark), serif" }}>
-            PolicyPulse
+            Policy<span className="logo-pulse-word">Pulse</span>
           </span>
         </div>
 
@@ -70,8 +78,8 @@ export default function QueryInput({ onSubmit }: QueryInputProps) {
           onClick={submit}
           disabled={!canRun}
           className={cn(
-            "mt-5 mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#ffe4a6] via-[#ffd06e] to-[#ffb870] px-4 py-2.5 text-md text-[#101319] shadow-[0_8px_20px_rgba(245,158,11,0.25)] transition",
-            canRun ? "hover:brightness-95" : "cursor-not-allowed opacity-40",
+            "mt-5 mx-auto flex w-full max-w-md items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#ffe4a6] via-[#ffd06e] to-[#ffb870] px-4 py-2.5 text-md text-[#101319] shadow-[0_8px_8px_rgba(245,158,11,0.25)] transition",
+            canRun ? "hover:shadow-[0_4px_6px_rgba(245,158,11,0.5)]" : "cursor-not-allowed opacity-40",
           )}
         >
           <BoltIcon />
