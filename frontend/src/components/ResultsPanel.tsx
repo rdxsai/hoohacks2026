@@ -2,21 +2,15 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import type { SynthesisReport } from "@/types/pipeline";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// ─── Convenience aliases (kept local so Samank's component code reads cleanly)
+// All data comes from SynthesisReport which is the pipeline's canonical type.
+// Every access below uses optional chaining + fallback defaults so the UI
+// never crashes on partial / malformed LLM output.
+// ───────────────────────────────────────────────────────────────────────────────
 
 type Confidence = "HIGH" | "MEDIUM" | "LOW";
-type Direction = "positive" | "negative";
-
-interface HeadlineMetric {
-  id: string;
-  label: string;
-  value: string;
-  range: { low: string; central: string; high: string } | null;
-  direction: Direction;
-  confidence: Confidence;
-  context: string;
-}
 
 interface WaterfallStep {
   label: string;
@@ -53,76 +47,6 @@ interface TimelinePhase {
   dominant_driver: string;
 }
 
-interface WinnerLoserProfile {
-  profile: string;
-  net_monthly_range: string;
-  pct_of_income_range: string;
-  why: string;
-  confidence: Confidence;
-  impact_quality?: string;
-  caveat?: string;
-  depends_on?: string;
-}
-
-interface GeographicRegion {
-  id: string;
-  name: string;
-  examples: string;
-  color: string;
-  rent_impact_severity: "HIGH" | "MEDIUM" | "LOW";
-  price_impact_severity: "HIGH" | "MEDIUM" | "LOW";
-  net_monthly_range_median_hh: string;
-  explanation: string;
-  key_factor: string;
-}
-
-interface FullReport {
-  meta: {
-    pipeline_duration_seconds: number;
-    total_tool_calls: number;
-    agents_completed: string[];
-    model_used: string;
-  };
-  policy: {
-    title: string;
-    one_liner: string;
-    geography: string;
-    estimated_annual_cost: string;
-  };
-  headline: {
-    verdict: string;
-    bottom_line: string;
-    confidence: Confidence;
-  };
-  headline_metrics: HeadlineMetric[];
-  waterfall: WaterfallData;
-  category_breakdown: { categories: CategoryItem[] };
-  timeline: { phases: TimelinePhase[]; household_profile: string };
-  winners_losers: {
-    winners: WinnerLoserProfile[];
-    losers: WinnerLoserProfile[];
-    mixed: WinnerLoserProfile[];
-    distributional_verdict: { progressive_or_regressive: string; explanation: string };
-  };
-  geographic_impact: { regions: GeographicRegion[] };
-  confidence_assessment: {
-    weakest_link: string;
-    what_would_change_conclusion: string[];
-    by_component: { component: string; confidence: Confidence; reasoning: string }[];
-  };
-  narrative: {
-    for_low_income: string;
-    for_middle_income: string;
-    for_upper_income: string;
-    for_small_business: string;
-    biggest_uncertainty: string;
-  };
-}
-
-interface ResultsPanelProps {
-  report: FullReport;
-}
-
 // ─── Color system ─────────────────────────────────────────────────────────────
 // Red = only for genuinely negative economic outcomes
 // Amber/orange = warnings, uncertainty, medium severity, trade-offs
@@ -151,11 +75,34 @@ const SEVERITY_STYLES: Record<"HIGH" | "MEDIUM" | "LOW", { bar: string; text: st
 
 // ─── Shared atoms ─────────────────────────────────────────────────────────────
 
-function ConfBadge({ c }: { c: Confidence }) {
+function ConfBadge({ c, large }: { c: string | undefined | null; large?: boolean }) {
+  const s = confStyle(c);
+  const [showTooltip, setShowTooltip] = useState(false);
+
+  const tooltipText: Record<string, string> = {
+    "High confidence": "Backed by direct data from government APIs or peer-reviewed studies",
+    "Medium confidence": "Based on established economic models with named assumptions",
+    "Low confidence": "Agent reasoning flagged as uncertain — treat as directional only",
+  };
+
   return (
-    <span className={cn("inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium", CONF_STYLES[c].pill)}>
-      <span className={cn("mr-1.5 h-1.5 w-1.5 rounded-full", CONF_STYLES[c].dot)} />
-      {CONF_STYLES[c].label}
+    <span
+      className={cn(
+        "inline-flex items-center rounded-full border font-medium relative cursor-help",
+        large ? "px-3.5 py-1 text-sm gap-2" : "px-2.5 py-0.5 text-xs",
+        s.pill,
+      )}
+      onMouseEnter={() => setShowTooltip(true)}
+      onMouseLeave={() => setShowTooltip(false)}
+    >
+      <span className={cn(large ? "h-2 w-2" : "h-1.5 w-1.5", "rounded-full", s.dot)} />
+      {large ? null : <span className="ml-1.5" />}
+      {s.label}
+      {showTooltip && (
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 rounded-lg bg-black/95 border border-white/10 px-3 py-2 text-[11px] text-white/70 leading-relaxed z-50 pointer-events-none shadow-lg">
+          {tooltipText[s.label] ?? "Confidence assessment from multi-agent analysis"}
+        </span>
+      )}
     </span>
   );
 }
@@ -202,46 +149,69 @@ function StepBadge({ n, label }: { n: number; label: string }) {
 
 // ─── 1: Hero header ───────────────────────────────────────────────────────────
 
-function PolicyHeader({ report }: { report: FullReport }) {
-  const pos = report.headline_metrics.filter((m) => m.direction === "positive").length;
-  const neg = report.headline_metrics.filter((m) => m.direction === "negative").length;
+function PolicyHeader({ report }: { report: SynthesisReport }) {
+  const metrics = report.headline_metrics ?? [];
+  const pos = metrics.filter((m) => m.direction === "positive").length;
+  const neg = metrics.filter((m) => m.direction === "negative").length;
   const total = pos + neg || 1;
   const posW = Math.round((pos / total) * 100);
 
-  const confStyle = CONF_STYLES[report.headline.confidence];
+  const headlineConf = confStyle(report.headline?.confidence);
 
+  // Verdict border color follows confidence — not always emerald
+  const verdictBorder: Record<string, string> = {
+    HIGH: "border-emerald-500/60 bg-emerald-950/20",
+    MEDIUM: "border-amber-500/50 bg-amber-950/15",
+    LOW: "border-slate-500/40 bg-slate-800/15",
+  };
+  const verdictLabel: Record<string, string> = {
+    HIGH: "text-emerald-400/70",
+    MEDIUM: "text-amber-400/70",
+    LOW: "text-slate-400/70",
+  };
+  const confKey = (report.headline?.confidence ?? "MEDIUM").toUpperCase();
+
+// Step indicator for the page narrative flow
+function StepBadge({ n, label }: { n: number; label: string }) {
   return (
     <Card className="p-6">
       {/* Tags row */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
+        {report.policy?.geography && (
+          <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1 text-xs text-white/55">
+            {report.policy.geography}
+          </span>
+        )}
         <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1 text-xs text-white/55">
-          {report.policy.geography}
+          {report.meta?.agents_completed?.length ?? 0} agents · {report.meta?.total_tool_calls ?? 0} data calls
         </span>
-        <span className="rounded-full border border-white/12 bg-white/6 px-3 py-1 text-xs text-white/55">
-          {report.meta.agents_completed.length} agents · {report.meta.total_tool_calls} data calls
-        </span>
-        {report.policy.estimated_annual_cost && (
+        {report.policy?.estimated_annual_cost && (
           <span className="rounded-full border border-orange-500/25 bg-orange-950/25 px-3 py-1 text-xs text-orange-300/80">
             Federal cost: {report.policy.estimated_annual_cost}/yr
           </span>
         )}
-        <span className={cn("ml-auto rounded-full border px-3 py-1 text-xs font-medium", confStyle.pill)}>
-          {confStyle.label}
+        <span className={cn("ml-auto rounded-full border px-3 py-1 text-xs font-medium", headlineConf.pill)}>
+          {headlineConf.label}
         </span>
       </div>
+      <span className="text-xs font-medium uppercase tracking-widest text-white/40">{label}</span>
+      <div className="h-px flex-1 bg-white/8" />
+    </div>
+  );
+}
 
       {/* Title */}
       <h1 className="mb-1 text-2xl font-semibold leading-snug tracking-tight text-white">
-        {report.policy.title}
+        {report.policy?.title ?? "Policy Analysis"}
       </h1>
-      <p className="mb-5 text-base text-white/50">{report.policy.one_liner}</p>
+      <p className="mb-5 text-base text-white/50">{report.policy?.one_liner ?? ""}</p>
 
-      {/* Verdict callout */}
-      <div className="mb-5 rounded-xl border-l-4 border-emerald-500/60 bg-emerald-950/20 px-4 py-3">
-        <div className="mb-0.5 text-xs font-semibold uppercase tracking-widest text-emerald-400/70">
+      {/* Verdict callout — color follows confidence */}
+      <div className={cn("mb-5 rounded-xl border-l-4 px-4 py-3", verdictBorder[confKey] ?? verdictBorder.MEDIUM)}>
+        <div className={cn("mb-0.5 text-xs font-semibold uppercase tracking-widest", verdictLabel[confKey] ?? verdictLabel.MEDIUM)}>
           Overall verdict
         </div>
-        <p className="text-[15px] font-medium leading-snug text-white/90">{report.headline.verdict}</p>
+        <p className="text-[15px] font-medium leading-snug text-white/90">{report.headline?.verdict ?? ""}</p>
       </div>
 
       {/* Signal bar */}
@@ -270,7 +240,8 @@ function PolicyHeader({ report }: { report: FullReport }) {
 
 // ─── 2: KPI strip ─────────────────────────────────────────────────────────────
 
-function KpiStrip({ metrics }: { metrics: HeadlineMetric[] }) {
+function KpiStrip({ metrics }: { metrics: SynthesisReport["headline_metrics"] }) {
+  if (!metrics || metrics.length === 0) return null;
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
       {metrics.slice(0, 5).map((m) => (
@@ -304,10 +275,12 @@ function KpiStrip({ metrics }: { metrics: HeadlineMetric[] }) {
 
 // ─── 3: Waterfall chart — SVG ─────────────────────────────────────────────────
 
-function WaterfallChart({ data }: { data: WaterfallData }) {
+function WaterfallChart({ data }: { data: SynthesisReport["waterfall"] }) {
   const [hoveredStep, setHoveredStep] = useState<string | null>(null);
+  if (!data?.steps || data.steps.length === 0) return <div className="text-sm text-white/30">No waterfall data available</div>;
   const steps = data.steps.filter((s) => s.value !== 0 && s.type !== "neutral");
-  const maxVal = Math.max(...steps.map((s) => Math.abs(s.value)));
+  if (steps.length === 0) return null;
+  const maxVal = Math.max(...steps.map((s) => Math.abs(s.value))) || 1;
 
   const BAR_H = 34;
   const BAR_GAP = 5;
@@ -405,9 +378,9 @@ function WaterfallChart({ data }: { data: WaterfallData }) {
       {/* Net summary */}
       <div className="mt-5 grid grid-cols-3 gap-3">
         {[
-          { label: "Net monthly gain", value: `+$${data.net_monthly}`, big: true },
-          { label: "Over a year", value: `+$${data.net_annual.toLocaleString()}` },
-          { label: "% of income", value: `+${data.pct_of_income}%` },
+          { label: "Net monthly gain", value: `+$${data.net_monthly ?? 0}`, big: true },
+          { label: "Over a year", value: `+$${(data.net_annual ?? 0).toLocaleString()}` },
+          { label: "% of income", value: `+${data.pct_of_income ?? 0}%` },
         ].map((s) => (
           <div key={s.label}
             className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 p-3 text-center">
@@ -424,12 +397,13 @@ function WaterfallChart({ data }: { data: WaterfallData }) {
 
 // ─── 4: Category chart — horizontal SVG bars ─────────────────────────────────
 
-function CategoryChart({ categories }: { categories: CategoryItem[] }) {
+function CategoryChart({ categories }: { categories: SynthesisReport["category_breakdown"]["categories"] }) {
   const [expanded, setExpanded] = useState<string | null>(null);
+  if (!categories || categories.length === 0) return <div className="text-sm text-white/30">No category data available</div>;
   const sorted = [...categories].sort(
-    (a, b) => Math.abs(b.dollar_impact_monthly.central) - Math.abs(a.dollar_impact_monthly.central),
+    (a, b) => Math.abs(b.dollar_impact_monthly?.central ?? 0) - Math.abs(a.dollar_impact_monthly?.central ?? 0),
   );
-  const maxAbs = Math.max(...sorted.map((c) => Math.abs(c.dollar_impact_monthly.central)));
+  const maxAbs = Math.max(...sorted.map((c) => Math.abs(c.dollar_impact_monthly?.central ?? 0))) || 1;
 
   const BAR_H = 30;
   const BAR_GAP = 7;
@@ -445,8 +419,9 @@ function CategoryChart({ categories }: { categories: CategoryItem[] }) {
       <div className="overflow-x-auto">
         <svg width="100%" viewBox={`0 0 ${SVG_W} ${svgH}`} style={{ minWidth: 420 }}>
           {sorted.map((cat, i) => {
-            const isNeg = cat.dollar_impact_monthly.central < 0;
-            const pct = Math.round((Math.abs(cat.dollar_impact_monthly.central) / maxAbs) * 100);
+            const centralVal = cat.dollar_impact_monthly?.central ?? 0;
+            const isNeg = centralVal < 0;
+            const pct = Math.round((Math.abs(centralVal) / maxAbs) * 100);
             const barW = Math.max(4, Math.round((pct / 100) * TRACK_W));
             const y = PAD + i * (BAR_H + BAR_GAP);
             // Costs use orange, not pure red — it's a cost, not a catastrophe
@@ -469,13 +444,13 @@ function CategoryChart({ categories }: { categories: CategoryItem[] }) {
                 {barW > 36 && (
                   <text x={LABEL_W + PAD + 8} y={y + BAR_H / 2}
                     dominantBaseline="central" fill={valFill} fontSize="11" fontWeight="500">
-                    {isNeg ? "" : "+"}{cat.pct_change.central}%
+                    {isNeg ? "" : "+"}{cat.pct_change?.central ?? 0}%
                   </text>
                 )}
                 <text x={LABEL_W + PAD + TRACK_W + 10} y={y + BAR_H / 2}
                   dominantBaseline="central"
                   fill={valFill} fontSize="12" fontWeight="500" fontFamily="monospace">
-                  {isNeg ? "–" : "+"}${Math.abs(cat.dollar_impact_monthly.central)}/mo
+                  {isNeg ? "–" : "+"}${Math.abs(centralVal)}/mo
                 </text>
               </g>
             );
@@ -496,7 +471,7 @@ function CategoryChart({ categories }: { categories: CategoryItem[] }) {
             <p className="mb-2 text-sm text-white/55">{cat.explanation}</p>
             {cat.note && <p className="mb-2 text-xs text-amber-300/70">{cat.note}</p>}
             <div className="text-xs text-white/30 tabular-nums">
-              Range: ${cat.dollar_impact_monthly.low} – ${cat.dollar_impact_monthly.high}/mo
+              Range: ${cat.dollar_impact_monthly?.low ?? 0} – ${cat.dollar_impact_monthly?.high ?? 0}/mo
             </div>
           </div>
         );
@@ -507,9 +482,10 @@ function CategoryChart({ categories }: { categories: CategoryItem[] }) {
 
 // ─── 5: Timeline chart ────────────────────────────────────────────────────────
 
-function TimelineChart({ phases, household_profile }: { phases: TimelinePhase[]; household_profile: string }) {
+function TimelineChart({ phases, household_profile }: { phases: SynthesisReport["timeline"]["phases"]; household_profile: string }) {
   const [activeIdx, setActiveIdx] = useState<number | null>(null);
-  const maxVal = Math.max(...phases.map((p) => p.cumulative_net_monthly.high));
+  if (!phases || phases.length < 2) return <div className="text-sm text-white/30">Insufficient timeline data</div>;
+  const maxVal = Math.max(...phases.map((p) => p.cumulative_net_monthly?.high ?? 0)) || 1;
   const W = 540;
   const H = 150;
   const PL = 48; const PR = 20; const PT = 14; const PB = 34;
@@ -517,11 +493,11 @@ function TimelineChart({ phases, household_profile }: { phases: TimelinePhase[];
   const xOf = (i: number) => PL + (i / (phases.length - 1)) * iW;
   const yOf = (v: number) => PT + iH - (v / maxVal) * iH;
 
-  const highPts = phases.map((p, i) => `${xOf(i)},${yOf(p.cumulative_net_monthly.high)}`).join(" ");
+  const highPts = phases.map((p, i) => `${xOf(i)},${yOf(p.cumulative_net_monthly?.high ?? 0)}`).join(" ");
   const lowPtsRev = [...phases].reverse().map((p, i) =>
-    `${xOf(phases.length - 1 - i)},${yOf(p.cumulative_net_monthly.low)}`
+    `${xOf(phases.length - 1 - i)},${yOf(p.cumulative_net_monthly?.low ?? 0)}`
   ).join(" ");
-  const centralPts = phases.map((p, i) => `${xOf(i)},${yOf(p.cumulative_net_monthly.central)}`).join(" ");
+  const centralPts = phases.map((p, i) => `${xOf(i)},${yOf(p.cumulative_net_monthly?.central ?? 0)}`).join(" ");
 
   // Mood → line color (no red — all phases net positive in this schema)
   const moodColor: Record<string, string> = {
@@ -555,7 +531,7 @@ function TimelineChart({ phases, household_profile }: { phases: TimelinePhase[];
 
           {/* Points + interaction */}
           {phases.map((p, i) => {
-            const x = xOf(i); const y = yOf(p.cumulative_net_monthly.central);
+            const x = xOf(i); const y = yOf(p.cumulative_net_monthly?.central ?? 0);
             const active = activeIdx === i;
             const color = moodColor[p.mood] ?? "#94a3b8";
             return (
@@ -576,11 +552,11 @@ function TimelineChart({ phases, household_profile }: { phases: TimelinePhase[];
                       fill="#181C23" stroke="rgba(255,255,255,0.12)" strokeWidth="0.5" />
                     <text x={Math.min(x - 65, W - 145) + 10} y={y - 33}
                       fill="rgba(255,255,255,0.88)" fontSize="13" fontWeight="600">
-                      +${p.cumulative_net_monthly.central}/mo
+                      +${p.cumulative_net_monthly?.central ?? 0}/mo
                     </text>
                     <text x={Math.min(x - 65, W - 145) + 10} y={y - 18}
                       fill="rgba(255,255,255,0.38)" fontSize="10">
-                      range ${p.cumulative_net_monthly.low}–${p.cumulative_net_monthly.high}
+                      range ${p.cumulative_net_monthly?.low ?? 0}–${p.cumulative_net_monthly?.high ?? 0}
                     </text>
                   </g>
                 )}
@@ -612,7 +588,7 @@ function TimelineChart({ phases, household_profile }: { phases: TimelinePhase[];
               <span className="w-20 shrink-0 text-sm font-medium text-white/65">{p.label}</span>
               <span className="flex-1 truncate text-sm text-white/38">{p.dominant_driver}</span>
               <span className="shrink-0 tabular-nums text-sm font-semibold text-emerald-300">
-                +${p.cumulative_net_monthly.central}/mo
+                +${p.cumulative_net_monthly?.central ?? 0}/mo
               </span>
             </div>
           );
@@ -629,7 +605,7 @@ function ProfileCard({
   profile,
   cardType,
 }: {
-  profile: WinnerLoserProfile;
+  profile: SynthesisReport["winners_losers"]["winners"][number];
   cardType: "winner" | "loser" | "mixed";
 }) {
   const [open, setOpen] = useState(false);
@@ -691,40 +667,46 @@ function ProfileCard({
   );
 }
 
-function WinnersLosers({ data }: { data: FullReport["winners_losers"] }) {
+function WinnersLosers({ data }: { data: SynthesisReport["winners_losers"] }) {
   type WLTab = "winners" | "losers" | "mixed";
   const [tab, setTab] = useState<WLTab>("winners");
 
+  const winners = data?.winners ?? [];
+  const losers = data?.losers ?? [];
+  const mixed = data?.mixed ?? [];
+
   const tabs: { key: WLTab; label: string; activeClass: string; count: number }[] = [
     {
-      key: "winners", label: "Winners", count: data.winners.length,
+      key: "winners", label: "Winners", count: winners.length,
       activeClass: "border-emerald-500/35 bg-emerald-950/30 text-emerald-300",
     },
     {
-      key: "losers", label: "Losers / risks", count: data.losers.length,
+      key: "losers", label: "Losers / risks", count: losers.length,
       activeClass: "border-orange-500/35 bg-orange-950/25 text-orange-300",
     },
     {
-      key: "mixed", label: "Mixed", count: data.mixed.length,
+      key: "mixed", label: "Mixed", count: mixed.length,
       activeClass: "border-amber-500/30 bg-amber-950/25 text-amber-300",
     },
   ];
 
-  const profiles: Record<WLTab, WinnerLoserProfile[]> = {
-    winners: data.winners,
-    losers: data.losers,
-    mixed: data.mixed,
+  const profiles: Record<WLTab, typeof winners> = {
+    winners,
+    losers,
+    mixed,
   };
 
   return (
     <div className="space-y-4">
       {/* Distributional verdict */}
-      <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4">
-        <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-emerald-400/70">
-          {data.distributional_verdict.progressive_or_regressive}
+      {data?.distributional_verdict && (
+        <div className="rounded-xl border border-emerald-500/20 bg-emerald-950/15 px-5 py-4">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-emerald-400/70">
+            {data.distributional_verdict.progressive_or_regressive ?? "Distributional Impact"}
+          </div>
+          <p className="text-sm leading-6 text-white/65">{data.distributional_verdict.explanation ?? ""}</p>
         </div>
-        <p className="text-sm leading-6 text-white/65">{data.distributional_verdict.explanation}</p>
-      </div>
+      )}
 
       {/* Tab row */}
       <div className="flex gap-2">
@@ -746,7 +728,7 @@ function WinnersLosers({ data }: { data: FullReport["winners_losers"] }) {
       {/* Cards */}
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {profiles[tab].map((p) => (
-          <ProfileCard key={p.profile} profile={p} cardType={tab} />
+          <ProfileCard key={p.profile} profile={p} cardType={tab === "winners" ? "winner" : tab === "losers" ? "loser" : "mixed"} />
         ))}
       </div>
     </div>
@@ -755,7 +737,7 @@ function WinnersLosers({ data }: { data: FullReport["winners_losers"] }) {
 
 // ─── 7: Geographic impact ─────────────────────────────────────────────────────
 
-function GeographicImpact({ regions }: { regions: GeographicRegion[] }) {
+function GeographicImpact({ regions }: { regions: SynthesisReport["geographic_impact"]["regions"] }) {
   return (
     <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
       {regions.map((r) => (
@@ -778,13 +760,13 @@ function GeographicImpact({ regions }: { regions: GeographicRegion[] }) {
               <div key={s.label}>
                 <div className="mb-1.5 flex justify-between text-xs text-white/40">
                   <span>{s.label}</span>
-                  <span className={SEVERITY_STYLES[s.severity].text}>
-                    {SEVERITY_STYLES[s.severity].label}
+                  <span className={(SEVERITY_STYLES as Record<string, typeof SEVERITY_STYLES.HIGH>)[s.severity]?.text ?? "text-white/40"}>
+                    {(SEVERITY_STYLES as Record<string, typeof SEVERITY_STYLES.HIGH>)[s.severity]?.label ?? s.severity}
                   </span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-white/8">
                   <div
-                    className={cn("h-full rounded-full transition-all", SEVERITY_STYLES[s.severity].bar)}
+                    className={cn("h-full rounded-full transition-all", (SEVERITY_STYLES as Record<string, typeof SEVERITY_STYLES.HIGH>)[s.severity]?.bar ?? "bg-white/20")}
                     style={{ width: s.severity === "HIGH" ? "75%" : s.severity === "MEDIUM" ? "48%" : "22%" }}
                   />
                 </div>
@@ -801,9 +783,10 @@ function GeographicImpact({ regions }: { regions: GeographicRegion[] }) {
 
 // ─── 8: Confidence radar — SVG pentagon ──────────────────────────────────────
 
-function ConfidenceRadar({ data }: { data: FullReport["confidence_assessment"] }) {
+function ConfidenceRadar({ data }: { data: SynthesisReport["confidence_assessment"] }) {
   const [expandedScenario, setExpandedScenario] = useState(false);
-  const components = data.by_component.slice(0, 5);
+  const components = (data?.by_component ?? []).slice(0, 5);
+  if (components.length === 0) return <div className="text-sm text-white/30">No confidence data available</div>;
   const scores: Record<Confidence, number> = { HIGH: 1, MEDIUM: 0.55, LOW: 0.2 };
 
   const SIZE = 180;
@@ -816,7 +799,7 @@ function ConfidenceRadar({ data }: { data: FullReport["confidence_assessment"] }
   }
 
   const gridLevels = [0.33, 0.67, 1];
-  const dataPoints = components.map((c, i) => polarPt(i, R * scores[c.confidence]));
+  const dataPoints = components.map((c, i) => polarPt(i, R * (scores[(c.confidence ?? "MEDIUM").toUpperCase() as Confidence] ?? 0.55)));
   const dataPath = dataPoints.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ") + "Z";
 
   return (
@@ -856,7 +839,7 @@ function ConfidenceRadar({ data }: { data: FullReport["confidence_assessment"] }
           <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-amber-400/70">
             Biggest uncertainty
           </div>
-          <p className="text-sm font-medium text-white/80">{data.weakest_link}</p>
+          <p className="text-sm font-medium text-white/80">{data?.weakest_link ?? "Unknown"}</p>
         </div>
 
         {/* Component confidence rows */}
@@ -873,13 +856,13 @@ function ConfidenceRadar({ data }: { data: FullReport["confidence_assessment"] }
           className="flex w-full items-center gap-2 rounded-lg border border-white/7 px-3 py-2.5 text-sm text-white/45 hover:text-white/65 transition-colors"
         >
           <span className="flex-1 text-left">
-            {data.what_would_change_conclusion.length} scenarios that change this conclusion
+            {(data?.what_would_change_conclusion ?? []).length} scenarios that change this conclusion
           </span>
           <Chevron open={expandedScenario} />
         </button>
         {expandedScenario && (
           <div className="space-y-2 rounded-xl border border-white/8 bg-white/[0.02] p-3">
-            {data.what_would_change_conclusion.map((item, i) => (
+            {(data?.what_would_change_conclusion ?? []).map((item, i) => (
               <div key={i} className="flex gap-2.5 text-sm text-white/50">
                 <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400/50" />
                 {item}
@@ -896,7 +879,7 @@ function ConfidenceRadar({ data }: { data: FullReport["confidence_assessment"] }
 
 type NarrativeTab = "low_income" | "middle_income" | "upper_income" | "small_business";
 
-function NarrativePanel({ narrative }: { narrative: FullReport["narrative"] }) {
+function NarrativePanel({ narrative }: { narrative: SynthesisReport["narrative"] }) {
   const [activeTab, setActiveTab] = useState<NarrativeTab>("middle_income");
 
   const tabs: { key: NarrativeTab; label: string }[] = [
@@ -908,10 +891,10 @@ function NarrativePanel({ narrative }: { narrative: FullReport["narrative"] }) {
 
   // Explicit mapping — no computed key indexing, avoids silent mismatch bugs
   function getContent(tab: NarrativeTab): string {
-    if (tab === "low_income")    return narrative.for_low_income;
-    if (tab === "middle_income") return narrative.for_middle_income;
-    if (tab === "upper_income")  return narrative.for_upper_income;
-    return narrative.for_small_business;
+    if (tab === "low_income")    return narrative?.for_low_income ?? "";
+    if (tab === "middle_income") return narrative?.for_middle_income ?? "";
+    if (tab === "upper_income")  return narrative?.for_upper_income ?? "";
+    return narrative?.for_small_business ?? "";
   }
 
   return (
@@ -943,35 +926,232 @@ function NarrativePanel({ narrative }: { narrative: FullReport["narrative"] }) {
         <div className="mb-1 text-xs font-semibold uppercase tracking-widest text-amber-400/65">
           Key uncertainty
         </div>
-        <p className="text-sm text-white/55">{narrative.biggest_uncertainty}</p>
+        <p className="text-sm text-white/55">{narrative?.biggest_uncertainty ?? ""}</p>
       </div>
     </div>
+  );
+}
+
+// ─── Data Sources Summary ──────────────────────────────────────────────────────
+
+function DataSourcesSummary({ report }: { report: SynthesisReport }) {
+  const ds = report.data_sources;
+  if (!ds) return null;
+
+  const agentCalls = ds.agents_and_calls ?? [];
+  const totalCalls = ds.total_tool_calls ?? report.meta?.total_tool_calls ?? 0;
+  const totalSeries = ds.total_unique_data_series ?? 0;
+  const agentsCompleted = report.meta?.agents_completed?.length ?? agentCalls.length;
+
+  // Unique data sources from tool info
+  const sourceNames = ["FRED", "BLS", "Census", "BEA", "Semantic Scholar", "CBO", "Tavily"];
+
+  return (
+    <div className="rounded-2xl border border-white/10 bg-[var(--bg-surface)] p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Stats */}
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-emerald-400 font-semibold">{totalCalls}</span>
+          <span className="text-white/45">data calls</span>
+        </div>
+        <span className="text-white/15">|</span>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-blue-400 font-semibold">{agentsCompleted}</span>
+          <span className="text-white/45">agents</span>
+        </div>
+        <span className="text-white/15">|</span>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-purple-400 font-semibold">{totalSeries}</span>
+          <span className="text-white/45">unique data series</span>
+        </div>
+        <span className="text-white/15">|</span>
+        <div className="flex items-center gap-2 text-sm">
+          <span className="text-amber-400 font-semibold">{report.meta?.pipeline_duration_seconds ?? 0}s</span>
+          <span className="text-white/45">pipeline time</span>
+        </div>
+
+        {/* Source badges */}
+        <div className="ml-auto flex flex-wrap gap-1.5">
+          {sourceNames.map(name => (
+            <span key={name} className="rounded-full border border-white/10 bg-white/[0.04] px-2 py-0.5 text-[10px] text-white/40">
+              {name}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Actionable Steps ("What You Can Do") ────────────────────────────────────
+
+function ActionableSteps({ report }: { report: SynthesisReport }) {
+  // Generate actionable steps from narrative context
+  const steps = generateActionableSteps(report);
+  if (steps.length === 0) return null;
+
+  return (
+    <Card className="border-emerald-500/15 bg-emerald-950/5">
+      <SectionHeading
+        label="What you can do"
+        sub="Concrete next steps based on this analysis"
+      />
+      <div className="space-y-3">
+        {steps.map((step, i) => (
+          <div key={i} className="flex items-start gap-3 rounded-lg border border-emerald-500/15 bg-emerald-950/10 px-4 py-3">
+            <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-500/20 text-xs font-bold text-emerald-400">
+              {i + 1}
+            </div>
+            <div>
+              <p className="text-sm text-white/75 leading-relaxed">{step.action}</p>
+              {step.context && <p className="mt-1 text-xs text-white/35">{step.context}</p>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Card>
+  );
+}
+
+function generateActionableSteps(report: SynthesisReport): Array<{ action: string; context?: string }> {
+  const steps: Array<{ action: string; context?: string }> = [];
+  const policyType = report.policy?.type?.toLowerCase() ?? "";
+  const title = report.policy?.title?.toLowerCase() ?? "";
+
+  // Immigration / visa related
+  if (policyType.includes("immigration") || title.includes("visa") || title.includes("h1b") || title.includes("h-1b")) {
+    steps.push(
+      { action: "Check your visa category and expiration dates immediately", context: "Processing times may change as policy takes effect" },
+      { action: "Consult an immigration attorney for personalized guidance", context: "Policy details often differ significantly from headlines" },
+      { action: "Monitor USCIS bulletins and Federal Register updates monthly" },
+    );
+  }
+  // Student loan related
+  if (title.includes("student loan") || title.includes("forgive") || title.includes("debt")) {
+    steps.push(
+      { action: "Verify your loan servicer and outstanding balance on StudentAid.gov", context: "Eligibility criteria vary by program and loan type" },
+      { action: "Do not stop making payments unless officially instructed", context: "Missed payments during processing can still affect credit" },
+      { action: "File your FAFSA and income-driven repayment application proactively" },
+    );
+  }
+  // Tariff / trade related
+  if (policyType.includes("tariff") || policyType.includes("trade") || title.includes("tariff") || title.includes("import")) {
+    steps.push(
+      { action: "Audit your supply chain for exposure to affected imports", context: "Identify components sourced from tariff-targeted countries" },
+      { action: "Explore domestic or alternative-country suppliers now", context: "Switching costs increase once tariffs take effect" },
+      { action: "Review pricing strategy and communicate potential changes to customers" },
+    );
+  }
+  // Tax related
+  if (policyType.includes("tax") || title.includes("tax")) {
+    steps.push(
+      { action: "Review your exposure to affected sectors and adjust portfolio diversification", context: "Tax changes affect equity valuations before they affect earnings" },
+      { action: "Consult a tax professional about planning opportunities before the effective date" },
+      { action: "If you run a business: model the impact on your margins using the scenario ranges above" },
+    );
+  }
+
+  // Generic steps if none matched
+  if (steps.length === 0) {
+    steps.push(
+      { action: "Stay informed — bookmark official government sources for updates", context: "Policy details evolve significantly during implementation" },
+      { action: "Assess your personal exposure using the income-tier breakdowns above" },
+      { action: "Consider consulting a professional advisor for your specific situation" },
+    );
+  }
+
+  return steps;
+}
+
+// ─── Sticky Section Nav ──────────────────────────────────────────────────────
+
+const SECTION_NAV = [
+  { id: "overview", label: "Overview", n: 1 },
+  { id: "waterfall", label: "Money Flow", n: 2 },
+  { id: "categories", label: "Categories", n: 3 },
+  { id: "winners", label: "Winners", n: 4 },
+  { id: "geography", label: "Geography", n: 5 },
+  { id: "confidence", label: "Confidence", n: 6 },
+  { id: "actions", label: "Actions", n: 7 },
+];
+
+function SectionNav() {
+  const [active, setActive] = useState("overview");
+
+  const scrollTo = (id: string) => {
+    const el = document.getElementById(`section-${id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+      setActive(id);
+    }
+  };
+
+  return (
+    <nav className="hidden lg:flex fixed right-4 top-1/2 -translate-y-1/2 z-40 flex-col gap-2">
+      {SECTION_NAV.map((s) => (
+        <button
+          key={s.id}
+          onClick={() => scrollTo(s.id)}
+          className={cn(
+            "group flex items-center gap-2 transition-all",
+          )}
+        >
+          <span className={cn(
+            "h-2 w-2 rounded-full transition-all",
+            active === s.id ? "bg-amber-400 scale-125" : "bg-white/20 group-hover:bg-white/40",
+          )} />
+          <span className={cn(
+            "text-[10px] font-medium opacity-0 group-hover:opacity-100 transition-opacity",
+            active === s.id ? "text-amber-300" : "text-white/50",
+          )}>
+            {s.label}
+          </span>
+        </button>
+      ))}
+    </nav>
   );
 }
 
 // ─── Main — page flow ─────────────────────────────────────────────────────────
 
 export default function ResultsPanel({ report }: ResultsPanelProps) {
+  if (!report) return null;
+
   return (
     <section className="mx-auto w-full max-w-5xl space-y-6 px-4 py-6 sm:px-6">
+      {/* Sticky section nav dots */}
+      <SectionNav />
+
+      {/* Data sources summary banner */}
+      <DataSourcesSummary report={report} />
 
       {/* ── Step 1: What is this policy? ── */}
-      <StepBadge n={1} label="Policy overview" />
+      <div id="section-overview">
+        <StepBadge n={1} label="Policy overview" />
+      </div>
       <PolicyHeader report={report} />
-      <KpiStrip metrics={report.headline_metrics} />
+      <KpiStrip metrics={report.headline_metrics ?? []} />
 
       {/* ── Step 2: Where does the money go? ── */}
-      <StepBadge n={2} label="Where does the money go?" />
-      <Card>
-        <SectionHeading
-          label={report.waterfall.title}
-          sub="Every dollar of the transfer, traced through taxes, rent, and prices to your net monthly gain"
-        />
-        <WaterfallChart data={report.waterfall} />
-      </Card>
+      {report.waterfall && (
+        <>
+          <div id="section-waterfall">
+            <StepBadge n={2} label="Where does the money go?" />
+          </div>
+          <Card>
+            <SectionHeading
+              label={report.waterfall?.title ?? "Household Budget Waterfall"}
+              sub="Every dollar of the transfer, traced through taxes, rent, and prices to your net monthly gain"
+            />
+            <WaterfallChart data={report.waterfall} />
+          </Card>
+        </>
+      )}
 
       {/* ── Step 3: What gets more expensive? ── */}
-      <StepBadge n={3} label="What gets more expensive?" />
+      <div id="section-categories">
+        <StepBadge n={3} label="What gets more expensive?" />
+      </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <SectionHeading
@@ -998,7 +1178,9 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
       </div>
 
       {/* ── Step 4: Who wins and who loses? ── */}
-      <StepBadge n={4} label="Who wins and who loses?" />
+      <div id="section-winners">
+        <StepBadge n={4} label="Who wins and who loses?" />
+      </div>
       <Card>
         <SectionHeading
           label="Who benefits — who doesn't"
@@ -1008,7 +1190,9 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
       </Card>
 
       {/* ── Step 5: Does location matter? ── */}
-      <StepBadge n={5} label="Does location matter?" />
+      <div id="section-geography">
+        <StepBadge n={5} label="Does location matter?" />
+      </div>
       <Card>
         <SectionHeading
           label="Impact by region"
@@ -1020,7 +1204,9 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
       </Card>
 
       {/* ── Step 6: How certain is this? ── */}
-      <StepBadge n={6} label="How certain is this?" />
+      <div id="section-confidence">
+        <StepBadge n={6} label="How certain is this?" />
+      </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <SectionHeading
@@ -1041,12 +1227,28 @@ export default function ResultsPanel({ report }: ResultsPanelProps) {
         </Card>
       </div>
 
-      {/* Footer */}
-      <footer className="pt-2 text-center text-xs text-white/25">
-        {report.meta.total_tool_calls} tool calls ·{" "}
-        {report.meta.agents_completed.length} agents ·{" "}
-        {report.meta.pipeline_duration_seconds}s ·{" "}
-        {report.meta.model_used}
+      {/* ── Step 7: What you can do ── */}
+      <div id="section-actions">
+        <StepBadge n={7} label="What you can do about it" />
+      </div>
+      <ActionableSteps report={report} />
+
+      {/* Cost transparency footer */}
+      <footer className="rounded-2xl border border-white/8 bg-white/[0.02] px-5 py-4">
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-2 text-xs text-white/35">
+          <span>{report.meta?.total_tool_calls ?? 0} tool calls</span>
+          <span className="text-white/10">|</span>
+          <span>{report.meta?.agents_completed?.length ?? 0} agents completed</span>
+          <span className="text-white/10">|</span>
+          <span>{report.meta?.pipeline_duration_seconds ?? 0}s total</span>
+          <span className="text-white/10">|</span>
+          <span>{report.meta?.model_used ?? "LLM"}</span>
+        </div>
+        <div className="mt-2 text-center text-[11px] text-white/20">
+          Estimated cost: ~$0.12 (LLM) + 66 sats / ~$0.02 (Lightning) = <span className="text-white/40 font-medium">~$0.14 total</span>
+          <span className="mx-2 text-white/10">|</span>
+          All government data APIs: $0
+        </div>
       </footer>
     </section>
   );

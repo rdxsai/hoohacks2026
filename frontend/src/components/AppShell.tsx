@@ -19,10 +19,15 @@ function BoltIcon() {
 
 export default function AppShell() {
   const [screen, setScreen] = useState<Screen>("query");
-  const { state, startPipeline } = usePipeline();
+  const { state, startPipeline, startMockPipeline } = usePipeline();
 
   const handleSubmit = (query: string) => {
     startPipeline(query);
+    setScreen("pipeline");
+  };
+
+  const handleMockSubmit = (query: string) => {
+    startMockPipeline(query);
     setScreen("pipeline");
   };
 
@@ -69,9 +74,24 @@ export default function AppShell() {
         </nav>
       )}
 
-      {screen === "query" && <QueryInput onSubmit={handleSubmit} />}
-      {screen === "pipeline" && <AgentFeed state={state} onViewReport={() => setScreen("results")} />}
-      {screen === "results" && state.synthesis && <ResultsPanel report={state.synthesis} />}
+      <div className={cn(
+        "transition-all duration-500",
+        screen === "query" ? "opacity-100 scale-100" : "opacity-0 scale-95 absolute inset-0 pointer-events-none",
+      )}>
+        {screen === "query" && <QueryInput onSubmit={handleSubmit} onMockSubmit={handleMockSubmit} />}
+      </div>
+      <div className={cn(
+        "transition-all duration-500",
+        screen === "pipeline" ? "opacity-100 translate-x-0" : screen === "results" ? "opacity-0 -translate-x-4 absolute inset-0 pointer-events-none" : "opacity-0 translate-x-4 absolute inset-0 pointer-events-none",
+      )}>
+        {(screen === "pipeline" || state.status === "running") && <AgentFeed state={state} onViewReport={() => setScreen("results")} />}
+      </div>
+      <div className={cn(
+        "transition-all duration-500",
+        screen === "results" ? "opacity-100 translate-x-0" : "opacity-0 translate-x-4 absolute inset-0 pointer-events-none",
+      )}>
+        {screen === "results" && state.synthesis && <ResultsPanel report={state.synthesis} />}
+      </div>
     </main>
   );
 }

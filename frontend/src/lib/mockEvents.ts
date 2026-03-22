@@ -899,6 +899,40 @@ function buildSynthesisReport(query: string): SynthesisReport {
       biggest_uncertainty:
         "The biggest unknown is how concurrent trends will interact: AI hiring may offset tech layoffs (potentially eliminating employment losses entirely), cloud vendors may compete harder on price (reducing pass-through to nearly zero), and international tax coordination (OECD minimum tax) may collapse profit-shifting channels (raising revenue gains). Additionally, Congress may pair this with other reforms (interest deduction caps, updated GILTI rates) that could amplify or dampen effects. Finally, firm-specific management responses to shareholder pressure are not predictable ex-ante: some will cut vendors aggressively, others will accept margin compression. The narrow path the policy takes through all these variables determines whether effects are 'moderate and manageable' or 'sharp and concentrated.'",
     },
+    sankey_data: {
+      nodes: [
+        { id: "policy", label: "30% Corp Tax Increase", category: "policy" },
+        { id: "labor", label: "Labor Market", category: "sector" },
+        { id: "housing", label: "Housing", category: "sector" },
+        { id: "consumer", label: "Consumer Prices", category: "sector" },
+        { id: "business", label: "Business", category: "sector" },
+        { id: "wages", label: "Wage Growth Slowdown", category: "effect" },
+        { id: "jobs", label: "Job Losses (14-35K)", category: "effect" },
+        { id: "rent", label: "Rent Softening", category: "effect" },
+        { id: "cloud", label: "Cloud Price +0.7-2%", category: "effect" },
+        { id: "vendor", label: "Vendor Spend -8-15%", category: "effect" },
+        { id: "revenue", label: "Fed Revenue +$50-85B", category: "outcome" },
+        { id: "techworker", label: "Tech Workers: -$5-20K/yr", category: "outcome" },
+        { id: "renters", label: "Renters: Slight Relief", category: "outcome" },
+        { id: "smallbiz", label: "Small Biz: Competitive Edge", category: "outcome" },
+      ],
+      links: [
+        { source: "policy", target: "labor", value: 35, label: "Tax incidence on compensation" },
+        { source: "policy", target: "housing", value: 15, label: "Reduced demand in tech hubs" },
+        { source: "policy", target: "consumer", value: 20, label: "Price pass-through" },
+        { source: "policy", target: "business", value: 30, label: "Margin compression" },
+        { source: "labor", target: "wages", value: 20, label: "0.3-0.8pp slower growth" },
+        { source: "labor", target: "jobs", value: 15, label: "Non-core function cuts" },
+        { source: "housing", target: "rent", value: 15, label: "0.5-1.5% decline in SF/Seattle" },
+        { source: "consumer", target: "cloud", value: 20, label: "Oligopoly pass-through" },
+        { source: "business", target: "vendor", value: 18, label: "Procurement cuts" },
+        { source: "policy", target: "revenue", value: 40, label: "After behavioral avoidance" },
+        { source: "wages", target: "techworker", value: 20 },
+        { source: "jobs", target: "techworker", value: 15 },
+        { source: "rent", target: "renters", value: 15 },
+        { source: "vendor", target: "smallbiz", value: 12, label: "Market gap opportunity" },
+      ],
+    },
   };
 }
 
@@ -925,6 +959,15 @@ function buildSectorToolCalls(): Array<{ delayMs: number; event: PipelineEvent }
 
 export function buildMockTimeline(query: string): TimedPipelineEvent[] {
   const events: TimedPipelineEvent[] = [];
+
+  // Classifier thinking events
+  events.push({ delayMs: 100, event: mkEvent("classifier_thinking", { step_type: "phase_start", content: "Analyzing policy query and extracting structured parameters", phase: "1" }) });
+  events.push({ delayMs: 180, event: mkEvent("classifier_thinking", { step_type: "reasoning", content: `Input query: "${query}"`, phase: "1" }) });
+  events.push({ delayMs: 250, event: mkEvent("classifier_thinking", { step_type: "tool_call", content: "Invoking Google ADK classifier (Gemini Flash)", phase: "1", tool: "google_adk" }) });
+  events.push({ delayMs: 380, event: mkEvent("classifier_thinking", { step_type: "tool_result", content: "ADK classification: policy_proposal (confidence: high)", phase: "1", tool: "google_adk" }) });
+  events.push({ delayMs: 420, event: mkEvent("classifier_thinking", { step_type: "reasoning", content: "Identified policy type: policy_proposal", phase: "2" }) });
+  events.push({ delayMs: 430, event: mkEvent("classifier_thinking", { step_type: "reasoning", content: "Extracted parameters: policy_action=Corporate tax increase, scope=Federal, threshold=>$50B revenue", phase: "2" }) });
+  events.push({ delayMs: 440, event: mkEvent("classifier_thinking", { step_type: "phase_complete", content: "Classification complete — routing to Analyst Agent", phase: "2" }) });
 
   events.push({
     delayMs: 450,
