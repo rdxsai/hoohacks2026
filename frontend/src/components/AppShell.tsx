@@ -19,10 +19,15 @@ function BoltIcon() {
 
 export default function AppShell() {
   const [screen, setScreen] = useState<Screen>("query");
-  const { state, startPipeline } = usePipeline();
+  const { state, startPipeline, startMockPipeline } = usePipeline();
 
   const handleSubmit = (query: string) => {
     startPipeline(query);
+    setScreen("pipeline");
+  };
+
+  const handleMockSubmit = (query: string) => {
+    startMockPipeline(query);
     setScreen("pipeline");
   };
 
@@ -32,7 +37,7 @@ export default function AppShell() {
         <nav className="sticky top-0 z-30 border-b border-white/10 bg-[#0a0c0f]/95 backdrop-blur px-4 sm:px-6 py-3 flex items-center gap-3">
           <BoltIcon />
           <span className="text-sm tracking-tight" style={{ fontFamily: "var(--font-wordmark), serif" }}>
-            PolicyPulse
+            Policy<span className="logo-pulse-word">Pulse</span>
           </span>
 
           <div className="ml-auto flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] p-1 text-xs">
@@ -69,9 +74,24 @@ export default function AppShell() {
         </nav>
       )}
 
-      {screen === "query" && <QueryInput onSubmit={handleSubmit} />}
-      {screen === "pipeline" && <AgentFeed state={state} onViewReport={() => setScreen("results")} />}
-      {screen === "results" && state.synthesis && <ResultsPanel report={state.synthesis} />}
+      <div className={cn(
+        "transition-all duration-500",
+        screen === "query" ? "opacity-100 scale-100" : "opacity-0 scale-95 absolute inset-0 pointer-events-none",
+      )}>
+        {screen === "query" && <QueryInput onSubmit={handleSubmit} onMockSubmit={handleMockSubmit} />}
+      </div>
+      <div className={cn(
+        "transition-all duration-500",
+        screen === "pipeline" ? "opacity-100 translate-x-0" : screen === "results" ? "opacity-0 -translate-x-4 absolute inset-0 pointer-events-none" : "opacity-0 translate-x-4 absolute inset-0 pointer-events-none",
+      )}>
+        {(screen === "pipeline" || state.status === "running") && <AgentFeed state={state} onViewReport={() => setScreen("results")} />}
+      </div>
+      <div className={cn(
+        "transition-all duration-500",
+        screen === "results" ? "opacity-100 translate-x-0" : "opacity-0 translate-x-4 absolute inset-0 pointer-events-none",
+      )}>
+        {screen === "results" && state.synthesis && <ResultsPanel report={state.synthesis} />}
+      </div>
     </main>
   );
 }

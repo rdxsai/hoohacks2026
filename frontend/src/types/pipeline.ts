@@ -278,6 +278,7 @@ export interface SynthesisReport {
     for_small_business: string;
     biggest_uncertainty: string;
   };
+  sankey_data?: SankeyData;
 }
 
 export interface ClassifierCompleteEvent {
@@ -436,6 +437,19 @@ export interface AgentResultEvent {
   timestamp: string;
 }
 
+export interface EvalScoreEvent {
+  type: "eval_score";
+  data: EvalScore & { tool_calls?: number; policy_type?: string };
+  agent: string;
+  timestamp: string;
+}
+
+export interface EvalPipelineEvent {
+  type: "eval_pipeline";
+  data: EvalPipelineResult;
+  timestamp: string;
+}
+
 export type PipelineEvent =
   | ClassifierThinkingEvent
   | ClassifierCompleteEvent
@@ -450,6 +464,8 @@ export type PipelineEvent =
   | SynthesisPhaseEvent
   | SynthesisThinkingEvent
   | SynthesisCompleteEvent
+  | EvalScoreEvent
+  | EvalPipelineEvent
   | ErrorEvent
   | PipelineCompleteEvent
   | PipelineErrorEvent

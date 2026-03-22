@@ -265,19 +265,19 @@ export function usePipeline() {
 
         es.addEventListener("error", () => {
           if (!receivedAnyEvents) {
-            console.log("Backend unreachable, falling back to mock events");
+            console.log("Backend unreachable, showing error to user");
             if (esRef.current) {
               esRef.current.close();
               esRef.current = null;
             }
-            runMockPipeline(query);
+            dispatch({ type: "pipeline/error", message: "Could not connect to backend. Start the server with `uvicorn backend.main:app --port 8000`, or use the Demo button to preview the UI with sample data." });
           } else {
             dispatch({ type: "pipeline/error", message: "Connection lost to backend" });
           }
         });
       } catch (err) {
         console.error("Failed to create EventSource:", err);
-        runMockPipeline(query);
+        dispatch({ type: "pipeline/error", message: "Failed to connect to backend. Use the Demo button to preview the UI with sample data." });
       }
     },
     [cleanup, startTimer, dispatchEvent, runMockPipeline],
@@ -285,5 +285,14 @@ export function usePipeline() {
 
   useEffect(() => cleanup, [cleanup]);
 
-  return { state, startPipeline };
+  const startMockPipeline = useCallback(
+    (query: string) => {
+      cleanup();
+      dispatch({ type: "pipeline/start", query });
+      runMockPipeline(query);
+    },
+    [cleanup, runMockPipeline],
+  );
+
+  return { state, startPipeline, startMockPipeline };
 }

@@ -61,30 +61,39 @@ function getAgentStatus(id: AgentId, state: PipelineState): "pending" | "running
 }
 
 function getActiveAgent(state: PipelineState): AgentId {
-  // Return the currently most interesting agent
+  // Stage 0: Classifier running
   if (!state.classifier && state.status === "running") return "classifier";
-  if (!state.analystComplete && state.classifier && state.status === "running") return "analyst";
-  if (state.analystComplete && state.lightningPayments.some(p => p.status === "paying")) return "lightning";
 
-  // During sector phase, pick the one with most recent activity
-  const runningAgents = (["Labor", "Housing", "Consumer", "Business"] as AgentId[]).filter(
-    id => state.sectorAgents[id]?.status === "running"
-  );
+  // Stage 1: Analyst running
+  if (!state.analystComplete && state.classifier && state.status === "running") return "analyst";
+
+  // Stage 3: Synthesis (check before sectors so it wins once synthesis starts)
+  if ((state.synthesisPhase || state.synthesisThinkingSteps.length > 0) && !state.synthesis) return "synthesis";
+
+  // Stage 2: Sector agents — pick the one with most recent thinking step
+  const sectorIds = ["Labor", "Housing", "Consumer", "Business"] as AgentId[];
+  const runningAgents = sectorIds.filter(id => state.sectorAgents[id]?.status === "running");
   if (runningAgents.length > 0) {
-    // Pick the one with the most thinking steps (most active)
     let best = runningAgents[0];
-    let bestSteps = 0;
+    let bestTs = 0;
     for (const id of runningAgents) {
-      const steps = state.sectorAgents[id]?.thinkingSteps.length ?? 0;
-      if (steps > bestSteps) { best = id; bestSteps = steps; }
+      const steps = state.sectorAgents[id]?.thinkingSteps ?? [];
+      const lastTs = steps.length > 0 ? steps[steps.length - 1].timestamp : 0;
+      if (lastTs > bestTs) { best = id; bestTs = lastTs; }
     }
     return best;
   }
 
-  if (state.synthesisPhase && !state.synthesis) return "synthesis";
-  if (state.lightningPayments.length > 0 && !Object.values(state.sectorAgents).some(a => a.status !== "pending")) return "lightning";
+  // Lightning: show when payments exist and sectors haven't started yet, or actively paying
+  if (state.lightningPayments.length > 0) {
+    const sectorsStarted = sectorIds.some(id => state.sectorAgents[id]?.status !== "pending");
+    if (!sectorsStarted || state.lightningPayments.some(p => p.status === "paying")) return "lightning";
+  }
 
-  return "analyst"; // fallback
+  // Fallback: show most recently completed stage
+  if (state.analystComplete) return "analyst";
+  if (state.classifier) return "classifier";
+  return "classifier";
 }
 
 /** Build a unified thinking stream for any agent */
@@ -271,14 +280,12 @@ function TimelineNode({
   focused,
   onClick,
   isLast,
-  thinkingCount,
 }: {
   id: AgentId;
   status: "pending" | "running" | "complete";
   focused: boolean;
   onClick: () => void;
   isLast: boolean;
-  thinkingCount: number;
 }) {
   const meta = AGENT_META[id];
   const colorMap: Record<string, { dot: string; ring: string; text: string; bg: string }> = {
@@ -297,18 +304,18 @@ function TimelineNode({
     <button
       onClick={onClick}
       className={cn(
-        "group relative flex items-start gap-3 w-full text-left px-3 py-2.5 rounded-lg transition-all duration-200",
-        focused ? `${c.bg} border border-white/10` : "hover:bg-white/[0.03]",
+        "group relative flex items-center gap-3 w-full text-left px-4 py-3.5 rounded-xl transition-all duration-200",
+        focused ? `${c.bg} border border-white/10` : "hover:bg-white/[0.03] border border-transparent",
       )}
     >
       {/* Timeline line */}
       {!isLast && (
-        <div className="absolute left-[22px] top-[38px] bottom-[-10px] w-px bg-white/10" />
+        <div className="absolute left-[27px] top-[48px] bottom-[-8px] w-px bg-white/8" />
       )}
 
       {/* Dot */}
       <div className={cn(
-        "relative flex-shrink-0 mt-0.5 h-5 w-5 rounded-full grid place-items-center text-[9px] font-bold transition-all",
+        "relative flex-shrink-0 h-7 w-7 rounded-full grid place-items-center text-[11px] font-bold transition-all",
         status === "complete" ? `${c.dot} text-black` : "",
         status === "running" ? `${c.dot} text-black animate-pulse ring-2 ${c.ring}` : "",
         status === "pending" ? "bg-white/10 text-white/30" : "",
@@ -316,26 +323,13 @@ function TimelineNode({
         {status === "complete" ? "✓" : meta.icon}
       </div>
 
-      {/* Label + summary */}
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1.5">
-          <span className={cn(
-            "text-[12px] font-medium leading-tight",
-            focused ? c.text : status === "pending" ? "text-white/35" : "text-white/75",
-          )}>
-            {meta.label}
-          </span>
-          {status === "running" && thinkingCount > 0 && (
-            <span className={cn("text-[9px] tabular-nums", c.text)}>{thinkingCount}</span>
-          )}
-        </div>
-        <div className={cn(
-          "text-[10px] leading-snug mt-0.5",
-          status === "pending" ? "text-white/20" : "text-white/40",
-        )}>
-          {status === "complete" ? "Done" : status === "running" ? "Active" : "Waiting"}
-        </div>
-      </div>
+      {/* Label */}
+      <span className={cn(
+        "text-[14px] font-medium",
+        focused ? c.text : status === "pending" ? "text-white/30" : "text-white/70",
+      )}>
+        {meta.label}
+      </span>
     </button>
   );
 }
@@ -362,28 +356,26 @@ function LightningBadge({
     <button
       onClick={onClick}
       className={cn(
-        "relative w-full flex items-center gap-2 px-3 py-2 my-1 rounded-md transition-all text-left",
+        "relative w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all text-left",
         focused
           ? "bg-amber-500/10 border border-amber-400/20"
-          : "hover:bg-white/[0.03]",
+          : "hover:bg-white/[0.03] border border-transparent",
       )}
     >
-      <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" className="flex-shrink-0">
+      <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="flex-shrink-0">
         <path d="M9.5 1L3 9h5.5L6.5 15 13 7H7.5L9.5 1z" fill={paying ? "#F59E0B" : paid.length > 0 ? "#F59E0B" : "#6B7280"} />
       </svg>
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5">
-          <span className={cn("text-[11px] font-medium", paying ? "text-amber-300" : paid.length > 0 ? "text-amber-300/70" : "text-white/40")}>
-            L402 Payments
-          </span>
-          {paying && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />}
-        </div>
+        <span className={cn("text-[13px] font-medium", paying ? "text-amber-300" : paid.length > 0 ? "text-amber-300/70" : "text-white/35")}>
+          L402
+        </span>
         {payments.length > 0 && (
-          <div className="text-[9px] text-amber-300/40 tabular-nums">
-            {paid.length}/{payments.length} paid · {totalSats} sats
-          </div>
+          <span className="ml-2 text-[11px] text-amber-300/40 tabular-nums">
+            {totalSats} sats
+          </span>
         )}
       </div>
+      {paying && <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />}
     </button>
   );
 }
@@ -400,31 +392,20 @@ function TimelineRail({
   const elapsed = formatDuration(state.elapsedMs);
 
   return (
-    <div className="flex flex-col h-full w-[200px] flex-shrink-0 border-r border-white/8">
-      {/* Header */}
-      <div className="px-3 py-3 border-b border-white/8">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-medium text-white/40 tracking-widest uppercase">Pipeline</span>
-          <div className="flex items-center gap-1.5">
-            {state.status === "running" && <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />}
-            <span className="text-[11px] text-white/45 tabular-nums">{elapsed}</span>
-          </div>
+    <div className="flex flex-col h-full w-[220px] flex-shrink-0 border-r border-white/8">
+      {/* Header — minimal */}
+      <div className="px-4 py-4 border-b border-white/8 flex items-center justify-between">
+        <span className="text-[13px] font-semibold text-white/50">Agents</span>
+        <div className="flex items-center gap-2">
+          {state.status === "running" && <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />}
+          <span className="text-[13px] text-white/40 tabular-nums">{elapsed}</span>
         </div>
       </div>
 
       {/* Agent nodes + Lightning badge */}
-      <div className="flex-1 overflow-y-auto py-1 no-scrollbar">
+      <div className="flex-1 overflow-y-auto py-2 no-scrollbar">
         {RAIL_AGENTS.map((id, i) => {
           const status = getAgentStatus(id, state);
-          // Cheap event count
-          let count = 0;
-          if (id === "analyst") count = state.analystThinkingSteps.length || (state.analystToolCalls.length + (state.analystComplete ? 1 : 0));
-          else if (id === "classifier") count = state.classifierThinkingSteps.length + (state.classifier ? 1 : 0);
-          else if (id === "synthesis") count = state.synthesisThinkingSteps.length || (state.synthesisPhase?.phase ?? 0);
-          else {
-            const sa = state.sectorAgents[id];
-            count = sa ? (sa.thinkingSteps.length || sa.toolCalls.length) : 0;
-          }
 
           return (
             <div key={id}>
@@ -434,7 +415,6 @@ function TimelineRail({
                 focused={focusedAgent === id}
                 onClick={() => onSelect(id)}
                 isLast={i === RAIL_AGENTS.length - 1}
-                thinkingCount={count}
               />
               {/* Insert Lightning badge after Analyst */}
               {id === "analyst" && (
@@ -448,18 +428,6 @@ function TimelineRail({
           );
         })}
       </div>
-
-      {/* View report button */}
-      {state.synthesis && (
-        <div className="p-3 border-t border-white/8">
-          <button
-            onClick={() => {/* handled by parent */}}
-            className="w-full rounded-lg bg-amber-500/90 px-3 py-2 text-xs font-medium text-black transition hover:brightness-95"
-          >
-            View Report
-          </button>
-        </div>
-      )}
     </div>
   );
 }
@@ -564,44 +532,44 @@ function ToolCallCard({ entry, isLatest }: { entry: StreamEntry; isLatest: boole
 
   return (
     <div className={cn(
-      "mx-4 my-1.5 rounded-lg border transition-all duration-300 spotlight-entry overflow-hidden",
+      "mx-6 my-2 rounded-xl border transition-all duration-300 spotlight-entry overflow-hidden",
       isLatest ? `${sc.border} ${sc.bg} shadow-sm` : "border-white/[0.06] bg-white/[0.02]",
     )}>
       {/* Header row: source badge + tool name + pulse */}
-      <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-sky-400/70 text-[11px]">⚙</span>
+      <div className="flex items-center gap-3 px-4 py-3">
+        <span className="text-sky-400/70 text-sm">⚙</span>
         {info && (
-          <span className={cn("text-[9px] font-semibold uppercase tracking-wider rounded px-1.5 py-0.5 border", sc.badge)}>
+          <span className={cn("text-[10px] font-semibold uppercase tracking-wider rounded px-2 py-0.5 border", sc.badge)}>
             {info.source}
           </span>
         )}
-        <span className="text-[12px] font-semibold text-white/80" style={{ fontFamily: "var(--font-mono), monospace" }}>
+        <span className="text-[14px] font-semibold text-white/80" style={{ fontFamily: "var(--font-mono), monospace" }}>
           {toolKey}
         </span>
-        {isLatest && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" />}
+        {isLatest && <span className="ml-auto h-2 w-2 rounded-full bg-sky-400 animate-pulse" />}
       </div>
 
       {/* Human-readable description */}
       {info && (
-        <div className="px-3 -mt-1 pb-1">
-          <span className="text-[11px] text-white/35">{info.label}</span>
+        <div className="px-4 -mt-1 pb-1">
+          <span className="text-[13px] text-white/35">{info.label}</span>
         </div>
       )}
 
       {/* Structured arguments */}
       {parsed.args && (
-        <div className="px-3 pb-2.5 pt-0.5">
+        <div className="px-4 pb-3 pt-1">
           {typeof parsed.args === "object" ? (
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
               {Object.entries(parsed.args).map(([k, v]) => (
-                <div key={k} className="flex items-baseline gap-1 text-[11px]" style={{ fontFamily: "var(--font-mono), monospace" }}>
+                <div key={k} className="flex items-baseline gap-1.5 text-[13px]" style={{ fontFamily: "var(--font-mono), monospace" }}>
                   <span className="text-white/25">{k}:</span>
                   <span className="text-white/50">{truncate(String(v), 60)}</span>
                 </div>
               ))}
             </div>
           ) : (
-            <div className="text-[11px] text-white/40 leading-relaxed" style={{ fontFamily: "var(--font-mono), monospace" }}>
+            <div className="text-[13px] text-white/40 leading-relaxed" style={{ fontFamily: "var(--font-mono), monospace" }}>
               {truncate(parsed.args, 120)}
             </div>
           )}
@@ -621,11 +589,11 @@ function ToolResultCard({ entry }: { entry: StreamEntry }) {
   const sc = SOURCE_COLORS[info?.color ?? "white"] ?? SOURCE_COLORS.white;
 
   return (
-    <div className={cn("mx-4 -mt-0.5 mb-1.5 rounded-b-lg border border-t-0 spotlight-entry", "border-white/[0.06] bg-white/[0.015]")}>
-      <div className="flex items-start gap-2 px-3 py-2">
-        <span className="text-green-400/60 text-[11px] mt-0.5">✓</span>
+    <div className={cn("mx-6 -mt-0.5 mb-2 rounded-b-xl border border-t-0 spotlight-entry", "border-white/[0.06] bg-white/[0.015]")}>
+      <div className="flex items-start gap-3 px-4 py-2.5">
+        <span className="text-green-400/60 text-sm mt-0.5">✓</span>
         <div className="flex-1 min-w-0">
-          <div className="text-[11px] text-white/45 leading-relaxed" style={{ fontFamily: "var(--font-mono), monospace" }}>
+          <div className="text-[13px] text-white/45 leading-relaxed" style={{ fontFamily: "var(--font-mono), monospace" }}>
             {truncate(resultText, 200)}
           </div>
         </div>
@@ -634,39 +602,52 @@ function ToolResultCard({ entry }: { entry: StreamEntry }) {
   );
 }
 
-/** Lightning payment card */
+/** Lightning payment card — with "Agent autonomously paid" annotation */
 function PaymentCard({ entry, isLatest }: { entry: StreamEntry; isLatest: boolean }) {
   const isPaying = entry.detail?.startsWith("Paying");
   const isPaid = entry.detail?.startsWith("Paid");
+  // Extract sats amount from detail string
+  const satsMatch = entry.detail?.match(/(\d+)\s*sats/);
+  const satsAmount = satsMatch ? parseInt(satsMatch[1], 10) : 0;
+  const usdEstimate = satsAmount > 0 ? (satsAmount * 0.0003).toFixed(4) : null;
+
   return (
     <div className={cn(
-      "mx-4 my-1.5 rounded-lg border transition-all duration-300 spotlight-entry overflow-hidden",
+      "mx-6 my-2 rounded-xl border transition-all duration-300 spotlight-entry overflow-hidden",
       isPaying
         ? "border-amber-500/30 bg-amber-500/[0.06]"
         : isPaid
           ? "border-green-500/20 bg-green-500/[0.04]"
           : "border-red-500/20 bg-red-500/[0.04]",
     )}>
-      <div className="flex items-center gap-2 px-3 py-2">
-        <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true" className="flex-shrink-0">
+      <div className="flex items-center gap-3 px-4 py-3">
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="flex-shrink-0">
           <path d="M9.5 1L3 9h5.5L6.5 15 13 7H7.5L9.5 1z" fill={isPaying ? "#F59E0B" : isPaid ? "#4ADE80" : "#F87171"} />
         </svg>
         <span className={cn(
-          "text-[12px] font-semibold tracking-wide",
+          "text-[14px] font-semibold tracking-wide",
           isPaying ? "text-amber-300" : isPaid ? "text-green-300" : "text-red-300",
         )} style={{ fontFamily: "var(--font-mono), monospace" }}>
           {entry.content}
         </span>
-        {isPaying && <span className="ml-auto h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />}
-        {isPaid && <span className="ml-auto text-green-400 text-xs">✔</span>}
+        {isPaying && <span className="ml-auto h-2 w-2 rounded-full bg-amber-400 animate-pulse" />}
+        {isPaid && <span className="ml-auto text-green-400 text-sm">✔</span>}
       </div>
       {entry.detail && (
-        <div className="px-3 pb-2 -mt-0.5">
+        <div className="px-4 pb-2.5 -mt-0.5">
           <div className={cn(
-            "text-[11px] leading-relaxed",
+            "text-[13px] leading-relaxed",
             isPaying ? "text-amber-300/50" : isPaid ? "text-green-300/40" : "text-red-300/50",
           )} style={{ fontFamily: "var(--font-mono), monospace" }}>
             {entry.detail}
+          </div>
+        </div>
+      )}
+      {/* Autonomous payment annotation */}
+      {isPaid && satsAmount > 0 && (
+        <div className="px-4 pb-3 -mt-0.5">
+          <div className="text-[12px] text-green-300/50 leading-relaxed italic">
+            Agent autonomously paid {satsAmount} sats{usdEstimate ? ` (~$${usdEstimate})` : ""} for premium data via L402
           </div>
         </div>
       )}
@@ -682,17 +663,17 @@ function SpotlightEntry({ entry, isLatest }: { entry: StreamEntry; isLatest: boo
 
   return (
     <div className={cn(
-      "flex gap-3 py-2 px-4 transition-colors duration-500 spotlight-entry",
+      "flex gap-4 py-3 px-6 transition-colors duration-500 spotlight-entry",
       isLatest && "bg-white/[0.03]",
-      entry.type === "phase" && "mt-3 first:mt-0",
+      entry.type === "phase" && "mt-4 first:mt-0",
     )}>
-      <span className="flex-shrink-0 mt-1 w-5 text-center">
+      <span className="flex-shrink-0 mt-1.5 w-5 text-center">
         <StreamIcon type={entry.type} />
       </span>
       <div className="flex-1 min-w-0">
         <div className={cn(
-          "text-[13px] leading-relaxed",
-          entry.type === "phase" ? "text-purple-300 font-semibold text-[14px]" :
+          "text-[15px] leading-relaxed",
+          entry.type === "phase" ? "text-purple-300 font-semibold text-[16px]" :
           entry.type === "reasoning" ? "text-white/70" :
           entry.type === "complete" ? "text-green-300/90 font-medium" :
           "text-white/60",
@@ -700,7 +681,7 @@ function SpotlightEntry({ entry, isLatest }: { entry: StreamEntry; isLatest: boo
           {entry.content}
         </div>
         {entry.detail && (
-          <div className="text-[12px] mt-0.5 text-white/30" style={{ fontFamily: "var(--font-mono), monospace" }}>
+          <div className="text-[13px] mt-1 text-white/30" style={{ fontFamily: "var(--font-mono), monospace" }}>
             {entry.detail}
           </div>
         )}
@@ -712,12 +693,12 @@ function SpotlightEntry({ entry, isLatest }: { entry: StreamEntry; isLatest: boo
 function EmptySpotlight({ agentId, status }: { agentId: AgentId; status: "pending" | "running" | "complete" }) {
   const meta = AGENT_META[agentId];
   return (
-    <div className="flex-1 flex flex-col items-center justify-center text-center px-8">
-      <div className="text-3xl mb-3 opacity-20">{meta.icon}</div>
-      <div className="text-white/30 text-sm font-medium mb-1">{meta.label}</div>
-      <div className="text-white/15 text-xs max-w-xs">
+    <div className="flex-1 flex flex-col items-center justify-center text-center px-12">
+      <div className="text-4xl mb-4 opacity-15">{meta.icon}</div>
+      <div className="text-white/30 text-lg font-medium mb-2">{meta.label}</div>
+      <div className="text-white/15 text-base max-w-sm leading-relaxed">
         {status === "pending"
-          ? `Waiting for upstream agents to complete...`
+          ? `Waiting for upstream agents...`
           : status === "running"
             ? "Processing — events will appear here..."
             : meta.description}
@@ -771,21 +752,21 @@ function SpotlightPanel({
   return (
     <div className="flex-1 flex flex-col min-h-0">
       {/* Spotlight header */}
-      <div className={cn("flex-shrink-0 border-b px-5 py-3", borderColor)}>
-        <div className="flex items-center gap-3">
-          <div className={cn("text-lg font-semibold", textColor)}>{meta.label}</div>
+      <div className={cn("flex-shrink-0 border-b px-6 py-5", borderColor)}>
+        <div className="flex items-center gap-4">
+          <div className={cn("text-2xl font-semibold", textColor)}>{meta.label}</div>
           <span className={cn(
-            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium border",
+            "inline-flex items-center gap-2 rounded-full px-3 py-1 text-[12px] font-medium border",
             status === "complete" ? "border-green-500/30 text-green-400 bg-green-500/10" :
             status === "running" ? `${borderColor} ${textColor} bg-white/[0.03]` :
             "border-white/10 text-white/30 bg-white/[0.02]",
           )}>
-            {status === "running" && <span className="h-1.5 w-1.5 rounded-full bg-current animate-pulse" />}
+            {status === "running" && <span className="h-2 w-2 rounded-full bg-current animate-pulse" />}
             {status}
           </span>
           {sectorData?.agentMode && (
             <span className={cn(
-              "rounded-full px-2 py-0.5 text-[9px] font-medium border",
+              "rounded-full px-3 py-1 text-[11px] font-medium border",
               sectorData.agentMode === "agentic"
                 ? "border-purple-400/30 bg-purple-500/15 text-purple-300"
                 : "border-white/10 bg-white/5 text-white/40",
@@ -793,15 +774,15 @@ function SpotlightPanel({
               {sectorData.agentMode === "agentic" ? "Multi-phase" : "Single-shot"}
             </span>
           )}
-          <span className="ml-auto text-[11px] text-white/30 tabular-nums">
+          <span className="ml-auto text-[13px] text-white/25 tabular-nums">
             {stream.length} events
           </span>
         </div>
-        <div className="text-[11px] text-white/35 mt-1">{meta.description}</div>
+        <div className="text-[14px] text-white/35 mt-2">{meta.description}</div>
 
         {/* Synthesis phase bar */}
         {agentId === "synthesis" && state.synthesisPhase && (
-          <div className="mt-2 flex gap-1">
+          <div className="mt-3 flex gap-1.5">
             {SYNTHESIS_PHASES.map((step, i) => (
               <div
                 key={step}
@@ -823,7 +804,7 @@ function SpotlightPanel({
 
         {/* Sector agent phase bar */}
         {sectorData?.agentMode === "agentic" && sectorData.currentPhase && (
-          <div className="mt-2 flex gap-1">
+          <div className="mt-3 flex gap-1.5">
             {Array.from({ length: 5 }, (_, i) => {
               const phaseNum = parseInt(sectorData.currentPhase ?? "0", 10);
               return (
@@ -847,18 +828,18 @@ function SpotlightPanel({
       {stream.length === 0 ? (
         <EmptySpotlight agentId={agentId} status={status} />
       ) : (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto py-2 no-scrollbar">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto py-4 no-scrollbar">
           {stream.map((entry, i) => (
             <SpotlightEntry key={entry.id} entry={entry} isLatest={i === stream.length - 1 && status === "running"} />
           ))}
 
           {/* Cursor when agent is running */}
           {status === "running" && (
-            <div className="flex gap-3 py-2 px-4">
-              <span className="flex-shrink-0 mt-1 w-5 text-center">
-                <span className={cn("inline-block h-2 w-2 rounded-full animate-pulse", `bg-${meta.color}-400`)} />
+            <div className="flex gap-4 py-3 px-6">
+              <span className="flex-shrink-0 mt-1.5 w-5 text-center">
+                <span className={cn("inline-block h-2.5 w-2.5 rounded-full animate-pulse", `bg-${meta.color}-400`)} />
               </span>
-              <span className="text-[13px] text-white/25 italic">thinking...</span>
+              <span className="text-[15px] text-white/25 italic">thinking...</span>
             </div>
           )}
         </div>
@@ -866,9 +847,9 @@ function SpotlightPanel({
 
       {/* Lightning payment summary bar */}
       {agentId === "lightning" && state.lightningPayments.length > 0 && (
-        <div className="flex-shrink-0 border-t border-amber-500/20 bg-amber-950/10 px-5 py-2.5">
-          <div className="flex items-center gap-3 text-[11px]">
-            <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" className="flex-shrink-0">
+        <div className="flex-shrink-0 border-t border-amber-500/20 bg-amber-950/10 px-6 py-3">
+          <div className="flex items-center gap-4 text-[13px]">
+            <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" className="flex-shrink-0">
               <path d="M9.5 1L3 9h5.5L6.5 15 13 7H7.5L9.5 1z" fill="#F59E0B" />
             </svg>
             <span className="text-amber-200/80 font-medium">
@@ -878,8 +859,8 @@ function SpotlightPanel({
               {state.lightningPayments.filter(p => p.status === "paid").reduce((s, p) => s + p.invoice_amount_sats, 0)} sats total
             </span>
             {state.lightningPayments.some(p => p.status === "paying") && (
-              <span className="flex items-center gap-1 text-amber-400 ml-auto">
-                <span className="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse" />
+              <span className="flex items-center gap-1.5 text-amber-400 ml-auto">
+                <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
                 paying...
               </span>
             )}
@@ -889,10 +870,10 @@ function SpotlightPanel({
 
       {/* View report CTA */}
       {state.synthesis && (
-        <div className="flex-shrink-0 border-t border-white/8 px-5 py-3">
+        <div className="flex-shrink-0 border-t border-white/8 px-6 py-4">
           <button
             onClick={onViewReport}
-            className="w-full rounded-lg border border-amber-400/30 bg-amber-500/90 px-4 py-2.5 text-sm font-medium text-black transition hover:brightness-95"
+            className="w-full rounded-xl border border-amber-400/30 bg-amber-500/90 px-4 py-3 text-base font-medium text-black transition hover:brightness-95"
           >
             View Full Report
           </button>
