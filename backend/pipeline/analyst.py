@@ -1,50 +1,283 @@
 """
-Stage 1: Analyst Agent — gathers baseline data from public APIs.
+Stage 1: Analyst Agent — 5-phase LangGraph agentic pipeline.
 
-Uses Rudra's tools (FRED, BLS, Semantic Scholar, etc.) to build a briefing
-packet, then optionally enriches it with an LLM summary.
+Uses Rudra's LangGraph analyst agent (backend/agents/) which runs 5 phases:
+  Phase 1: Policy Specification (ReAct — web search, doc fetch, FRED)
+  Phase 2: Baseline & Counterfactual (ReAct — FRED, BLS)
+  Phase 3: Transmission Channel Mapping (reasoning only)
+  Phase 4: Evidence Gathering (ReAct — academic search, CBO, news)
+  Phase 5: Synthesis & Briefing (reasoning only)
+
+Each phase emits SSE events so the frontend shows live progress.
+
+Falls back to simple hardcoded tool calls if LangGraph is unavailable.
 
 ===========================================================================
 INTEGRATION GUIDE
 ===========================================================================
-This stage calls REAL government APIs via Rudra's tools in backend/tools/.
-Each tool call emits an SSE event so the frontend shows live data gathering.
+This stage now uses the FULL LangGraph agentic analyst from backend/agents/.
+The agent makes 12-18 real tool calls across 3 ReAct phases, interleaved
+with 2 pure-reasoning phases, producing a structured AnalystBriefing.
 
-If API keys are missing or calls fail, the stage gracefully degrades:
-it still produces a briefing packet (possibly empty) and continues.
+The briefing is converted to the pipeline's dict format and stored in
+state.briefing for downstream sector agents.
 
-OWNER: Rudra — enhance with more sophisticated query planning via LLM.
-Currently uses a hardcoded search strategy per policy_type.
+OWNER: Rudra (agent quality) + Praneeth (pipeline integration + SSE)
 ===========================================================================
 """
 
 from __future__ import annotations
 
-import asyncio
+import json
+import logging
+import time
 from typing import Any, Awaitable, Callable
 
 from backend.pipeline.orchestrator import PipelineState
 from backend.pipeline.llm import llm_chat, parse_json_response
 
+logger = logging.getLogger(__name__)
+
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
+# Phase metadata for SSE events
+ANALYST_PHASES = {
+    1: {"name": "Policy Specification", "type": "react", "tools": ["web_search_news", "fetch_document_text", "fred_get_series"]},
+    2: {"name": "Baseline & Counterfactual", "type": "react", "tools": ["fred_search", "fred_get_series", "bls_get_data"]},
+    3: {"name": "Transmission Mapping", "type": "reasoning", "tools": []},
+    4: {"name": "Evidence Gathering", "type": "react", "tools": ["search_academic_papers", "search_openalex", "search_cbo_reports", "fetch_document_text", "web_search_news"]},
+    5: {"name": "Synthesis & Briefing", "type": "reasoning", "tools": []},
+}
+
+
+async def run_analyst(state: PipelineState, emit: EventCallback) -> PipelineState:
+    """Stage 1: Run the full 5-phase LangGraph analyst agent."""
+    await emit({
+        "type": "agent_start",
+        "agent": "analyst",
+        "data": {
+            "policy_type": state.policy_type,
+            "mode": "agentic",
+            "phases": len(ANALYST_PHASES),
+        },
+    })
+
+    try:
+        state = await _run_langgraph_analyst(state, emit)
+    except Exception as e:
+        logger.warning(f"LangGraph analyst failed ({e}), falling back to simple analyst")
+        await emit({
+            "type": "analyst_tool_call",
+            "agent": "analyst",
+            "data": {"tool": "fallback", "query": f"LangGraph unavailable: {str(e)[:100]}. Using simple analyst."},
+        })
+        state = await _run_simple_analyst(state, emit)
+
+    return state
+
+
 # ---------------------------------------------------------------------------
+# LangGraph agentic analyst (primary path)
+# ---------------------------------------------------------------------------
+
+async def _run_langgraph_analyst(state: PipelineState, emit: EventCallback) -> PipelineState:
+    """Run Rudra's 5-phase LangGraph analyst agent with SSE events per phase."""
+    from backend.agents.graph import AnalystState, build_analyst_graph
+    from backend.agents.schemas import AnalystBriefing, ToolCallRecord as AgentToolCallRecord
+
+    graph = build_analyst_graph()
+
+    initial_state: AnalystState = {
+        "policy_query": state.query,
+        "current_phase": 1,
+        "phase_1_output": None,
+        "phase_2_output": None,
+        "phase_3_output": None,
+        "phase_4_output": None,
+        "phase_5_output": None,
+        "tool_call_log": [],
+    }
+
+    # Stream through the graph to emit per-phase SSE events
+    phase_start_times: dict[int, float] = {}
+    current_phase = 0
+    total_tool_calls = 0
+
+    async for event in graph.astream(initial_state, stream_mode="updates"):
+        for node_name, node_output in event.items():
+            new_phase = node_output.get("current_phase", current_phase)
+
+            # Detect phase transition
+            if new_phase != current_phase:
+                # Complete previous phase
+                if current_phase > 0 and current_phase in phase_start_times:
+                    phase_duration = time.time() - phase_start_times[current_phase]
+                    phase_tool_records = node_output.get("tool_call_log", [])
+                    # tool_call_log is cumulative, count new ones
+                    new_tool_count = len(phase_tool_records) - total_tool_calls
+                    total_tool_calls = len(phase_tool_records)
+
+                    await emit({
+                        "type": "analyst_tool_call",
+                        "agent": "analyst",
+                        "data": {
+                            "tool": f"phase_{current_phase}_complete",
+                            "query": f"Phase {current_phase} ({ANALYST_PHASES[current_phase]['name']}) complete — {new_tool_count} tool calls in {phase_duration:.1f}s",
+                        },
+                    })
+
+                # Start new phase
+                prev_phase = current_phase
+                current_phase = new_phase
+                if current_phase <= 5:
+                    phase_meta = ANALYST_PHASES.get(current_phase, {})
+                    phase_start_times[current_phase] = time.time()
+                    await emit({
+                        "type": "analyst_tool_call",
+                        "agent": "analyst",
+                        "data": {
+                            "tool": f"phase_{current_phase}_start",
+                            "query": f"Phase {current_phase}/5: {phase_meta.get('name', 'Unknown')} ({phase_meta.get('type', 'unknown')})",
+                        },
+                    })
+
+                    # Emit individual tool availability for ReAct phases
+                    if phase_meta.get("tools"):
+                        await emit({
+                            "type": "analyst_tool_call",
+                            "agent": "analyst",
+                            "data": {
+                                "tool": "tools_available",
+                                "query": f"Tools: {', '.join(phase_meta['tools'])}",
+                            },
+                        })
+
+            # Extract tool call records from this node's output for SSE
+            new_records = node_output.get("tool_call_log", [])
+            if new_records and len(new_records) > total_tool_calls:
+                for record in new_records[total_tool_calls:]:
+                    if hasattr(record, "tool_name"):
+                        await emit({
+                            "type": "analyst_tool_call",
+                            "agent": "analyst",
+                            "data": {
+                                "tool": record.tool_name,
+                                "query": json.dumps(record.arguments)[:200] if record.arguments else "",
+                            },
+                        })
+                total_tool_calls = len(new_records)
+
+            # Check if we got the final briefing
+            briefing = node_output.get("phase_5_output")
+            if briefing is not None:
+                # Final phase complete
+                if current_phase in phase_start_times:
+                    phase_duration = time.time() - phase_start_times[current_phase]
+                    await emit({
+                        "type": "analyst_tool_call",
+                        "agent": "analyst",
+                        "data": {
+                            "tool": "phase_5_complete",
+                            "query": f"Phase 5 (Synthesis & Briefing) complete in {phase_duration:.1f}s",
+                        },
+                    })
+
+                # Convert AnalystBriefing → pipeline briefing dict
+                state.briefing = _briefing_to_dict(briefing)
+                state.briefing["policy_params"] = state.policy_params
+
+                # Convert tool records
+                all_records = node_output.get("tool_call_log", [])
+                state.tool_calls = [
+                    {
+                        "tool": r.tool_name if hasattr(r, "tool_name") else str(r),
+                        "args": r.arguments if hasattr(r, "arguments") else {},
+                        "success": True,
+                        "summary": r.result_summary[:100] if hasattr(r, "result_summary") else "",
+                    }
+                    for r in all_records
+                ]
+
+    # Emit analyst_complete
+    tools_succeeded = len(state.tool_calls)
+    summary_text = state.briefing.get("summary", state.briefing.get("executive_summary", "Analysis complete"))
+    if isinstance(summary_text, str):
+        summary_text = summary_text[:500]
+    else:
+        summary_text = "Analysis complete"
+
+    await emit({
+        "type": "analyst_complete",
+        "agent": "analyst",
+        "data": {
+            "briefing_summary": summary_text,
+            "sources_found": tools_succeeded,
+            "tool_calls_made": tools_succeeded,
+            "tools_called": tools_succeeded,
+            "tools_succeeded": tools_succeeded,
+            "summary": summary_text,
+            "mode": "agentic",
+            "phases_completed": 5,
+        },
+    })
+
+    return state
+
+
+def _briefing_to_dict(briefing: Any) -> dict[str, Any]:
+    """Convert an AnalystBriefing Pydantic model to the pipeline's briefing dict."""
+    if hasattr(briefing, "model_dump"):
+        d = briefing.model_dump()
+    elif isinstance(briefing, dict):
+        d = briefing
+    else:
+        return {"summary": str(briefing)}
+
+    # Flatten into the format downstream stages expect
+    result: dict[str, Any] = {
+        "summary": d.get("executive_summary", ""),
+        "executive_summary": d.get("executive_summary", ""),
+        "key_findings": d.get("key_findings", []),
+        "critical_uncertainties": d.get("critical_uncertainties", []),
+        "policy_spec": d.get("policy_spec"),
+        "baseline": d.get("baseline"),
+        "transmission_channels": d.get("transmission_channels", []),
+        "evidence": d.get("evidence"),
+        "sector_exposure": d.get("sector_exposure", []),
+        "distributional_by_income": d.get("distributional_by_income", []),
+        "distributional_by_geography": d.get("distributional_by_geography", []),
+        "distributional_by_industry": d.get("distributional_by_industry", []),
+        "distributional_by_firm_size": d.get("distributional_by_firm_size", []),
+        "distributional_by_demographic": d.get("distributional_by_demographic", []),
+        "revenue_effects": d.get("revenue_effects", ""),
+        "transfer_program_effects": d.get("transfer_program_effects", ""),
+        "government_cost_effects": d.get("government_cost_effects", ""),
+        "key_assumptions": d.get("key_assumptions", []),
+        "sensitivity_factors": d.get("sensitivity_factors", []),
+        "scenarios": d.get("scenarios", {}),
+        "analogous_cases": d.get("analogous_cases", []),
+    }
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Simple fallback analyst (used if LangGraph is unavailable)
+# ---------------------------------------------------------------------------
+
 # Search strategies per policy type
-# Maps policy_type → list of (tool_name, query/params) to execute
-# ---------------------------------------------------------------------------
 SEARCH_STRATEGIES: dict[str, list[dict[str, Any]]] = {
     "immigration": [
         {"tool": "fred_search", "args": {"query": "H-1B visa employment"}},
-        {"tool": "fred_get_series", "args": {"series_id": "UNRATE"}},  # unemployment rate
-        {"tool": "fred_get_series", "args": {"series_id": "LNS12300060"}},  # employment-population ratio
-        {"tool": "bls_get_data", "args": {"series_ids": ["CES0500000003"]}},  # avg hourly earnings
+        {"tool": "fred_get_series", "args": {"series_id": "UNRATE"}},
+        {"tool": "fred_get_series", "args": {"series_id": "LNS12300060"}},
+        {"tool": "bls_get_data", "args": {"series_ids": ["CES0500000003"]}},
         {"tool": "search_academic_papers", "args": {"query": "H-1B visa labor market impact"}},
         {"tool": "web_search_news", "args": {"query": "H-1B visa policy 2026 changes"}},
         {"tool": "search_cbo_reports", "args": {"query": "immigration skilled workers economic impact"}},
     ],
     "education_finance": [
         {"tool": "fred_search", "args": {"query": "student loan debt"}},
-        {"tool": "fred_get_series", "args": {"series_id": "SLOAS"}},  # student loans outstanding
+        {"tool": "fred_get_series", "args": {"series_id": "SLOAS"}},
         {"tool": "fred_get_series", "args": {"series_id": "UNRATE"}},
         {"tool": "search_academic_papers", "args": {"query": "student loan forgiveness economic impact"}},
         {"tool": "web_search_news", "args": {"query": "student loan forgiveness plan 2026"}},
@@ -52,19 +285,18 @@ SEARCH_STRATEGIES: dict[str, list[dict[str, Any]]] = {
     ],
     "trade": [
         {"tool": "fred_search", "args": {"query": "tariff electronics imports China"}},
-        {"tool": "fred_get_series", "args": {"series_id": "BOPGSTB"}},  # trade balance
-        {"tool": "fred_get_series", "args": {"series_id": "PCUOMFG"}},  # PPI manufacturing
-        {"tool": "bls_get_data", "args": {"series_ids": ["CUUR0000SA0"]}},  # CPI-U
+        {"tool": "fred_get_series", "args": {"series_id": "BOPGSTB"}},
+        {"tool": "fred_get_series", "args": {"series_id": "PCUOMFG"}},
+        {"tool": "bls_get_data", "args": {"series_ids": ["CUUR0000SA0"]}},
         {"tool": "search_academic_papers", "args": {"query": "tariff consumer prices small business impact"}},
         {"tool": "web_search_news", "args": {"query": "China electronics tariff 2026 impact"}},
     ],
 }
 
-# Default strategy for unknown policy types
 DEFAULT_STRATEGY = [
     {"tool": "fred_get_series", "args": {"series_id": "UNRATE"}},
-    {"tool": "fred_get_series", "args": {"series_id": "CPIAUCSL"}},  # CPI
-    {"tool": "web_search_news", "args": {"query": ""}},  # will be filled with state.query
+    {"tool": "fred_get_series", "args": {"series_id": "CPIAUCSL"}},
+    {"tool": "web_search_news", "args": {"query": ""}},
 ]
 
 
@@ -78,7 +310,6 @@ async def _call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
 
     try:
         result = await tool_fn(**args)
-        # Convert Pydantic model to dict
         if hasattr(result, "model_dump"):
             return result.model_dump()
         return result
@@ -86,23 +317,14 @@ async def _call_tool(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"{tool_name} failed: {str(e)[:200]}"}
 
 
-async def run_analyst(state: PipelineState, emit: EventCallback) -> PipelineState:
-    """Stage 1: Gather baseline data from public APIs."""
-    await emit({
-        "type": "agent_start",
-        "agent": "analyst",
-        "data": {"policy_type": state.policy_type},
-    })
-
-    # Select search strategy
+async def _run_simple_analyst(state: PipelineState, emit: EventCallback) -> PipelineState:
+    """Fallback: simple hardcoded tool calls without LangGraph."""
     strategy = SEARCH_STRATEGIES.get(state.policy_type, DEFAULT_STRATEGY)
 
-    # Fill in any query placeholders
     for step in strategy:
         if step["tool"] == "web_search_news" and not step["args"].get("query"):
             step["args"]["query"] = state.query
 
-    # Execute tool calls with SSE events
     briefing_data: dict[str, Any] = {}
     tool_records: list[dict[str, Any]] = []
 
@@ -110,7 +332,6 @@ async def run_analyst(state: PipelineState, emit: EventCallback) -> PipelineStat
         tool_name = step["tool"]
         args = step["args"]
 
-        # Emit tool call event
         await emit({
             "type": "analyst_tool_call",
             "agent": "analyst",
@@ -128,7 +349,6 @@ async def run_analyst(state: PipelineState, emit: EventCallback) -> PipelineStat
 
         briefing_data[f"{tool_name}_{len(tool_records)}"] = result
 
-    # Optionally summarize briefing with LLM
     briefing_summary = await _summarize_briefing(state, briefing_data)
 
     state.briefing = {
@@ -139,7 +359,6 @@ async def run_analyst(state: PipelineState, emit: EventCallback) -> PipelineStat
     }
     state.tool_calls = tool_records
 
-    # Emit both backend and frontend event shapes for compatibility
     tools_succeeded = sum(1 for t in tool_records if t["success"])
     briefing_summary_text = briefing_summary[:500] if briefing_summary else "Data gathered"
 
@@ -147,14 +366,13 @@ async def run_analyst(state: PipelineState, emit: EventCallback) -> PipelineStat
         "type": "analyst_complete",
         "agent": "analyst",
         "data": {
-            # Frontend-expected fields
             "briefing_summary": briefing_summary_text,
             "sources_found": tools_succeeded,
             "tool_calls_made": len(tool_records),
-            # Keep backend fields for backward compat
             "tools_called": len(tool_records),
             "tools_succeeded": tools_succeeded,
             "summary": briefing_summary_text,
+            "mode": "simple",
         },
     })
 
@@ -195,9 +413,6 @@ async def _summarize_briefing(
     state: PipelineState, data: dict[str, Any]
 ) -> str:
     """Use LLM to synthesize raw data into a readable briefing."""
-    import json
-
-    # Trim data to avoid token limits
     data_str = json.dumps(data, default=str)[:8000]
 
     try:
