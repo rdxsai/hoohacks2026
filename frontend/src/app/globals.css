@@ -54,22 +54,22 @@ body::after {
 body::before {
   background:
     radial-gradient(circle at 18% 20%, rgba(245, 158, 11, 0.28) 0%, rgba(245, 158, 11, 0.1) 6%, transparent 14%),
-    radial-gradient(circle at 28% 68%, rgba(77, 217, 255, 0.22) 0%, rgba(77, 217, 255, 0.08) 7%, transparent 15%),
-    radial-gradient(circle at 46% 30%, rgba(96, 165, 250, 0.2) 0%, rgba(96, 165, 250, 0.08) 6%, transparent 13%),
-    radial-gradient(ellipse 38% 30% at 99% 56%, rgba(59, 130, 246, 0.28) 0%, rgba(59, 130, 246, 0.14) 22%, transparent 58%),
+    radial-gradient(circle at 28% 68%, rgba(77, 217, 255, 0.22) 0%, rgba(77, 217, 255, 0.08) 8%, transparent 17%),
+    radial-gradient(circle at 46% 30%, rgba(96, 165, 250, 0.2) 0%, rgba(96, 165, 250, 0.08) 7%, transparent 15%),
+    radial-gradient(ellipse 40% 32% at 99% 56%, rgba(59, 130, 246, 0.28) 0%, rgba(59, 130, 246, 0.14) 24%, transparent 62%),
     linear-gradient(155deg, #06080d 0%, #0a0f17 52%, #090d14 100%);
-  background-size: 135% 135%, 145% 145%, 130% 130%, 180% 180%, cover;
+  background-size: 145% 145%, 155% 155%, 140% 140%, 192% 192%, cover;
   background-repeat: no-repeat;
-  filter: blur(1px) brightness(1);
+  filter: blur(4px) brightness(1);
   animation: ambientShift 16s ease-in-out infinite alternate, ambientPulse 4.4s ease-in-out infinite, bokehBreath 8.5s ease-in-out infinite;
 }
 
 body::after {
   background:
-    radial-gradient(circle at 14% 78%, rgba(77, 217, 255, 0.2) 0%, rgba(77, 217, 255, 0.08) 6%, transparent 14%),
-    radial-gradient(circle at 38% 56%, rgba(245, 158, 11, 0.16) 0%, rgba(245, 158, 11, 0.06) 5%, transparent 13%),
-    radial-gradient(ellipse 30% 24% at 98% 34%, rgba(96, 165, 250, 0.26) 0%, rgba(96, 165, 250, 0.11) 20%, transparent 56%);
-  filter: blur(26px);
+    radial-gradient(circle at 14% 78%, rgba(77, 217, 255, 0.2) 0%, rgba(77, 217, 255, 0.08) 7%, transparent 16%),
+    radial-gradient(circle at 38% 56%, rgba(245, 158, 11, 0.16) 0%, rgba(245, 158, 11, 0.06) 6%, transparent 15%),
+    radial-gradient(ellipse 34% 28% at 98% 34%, rgba(96, 165, 250, 0.26) 0%, rgba(96, 165, 250, 0.11) 22%, transparent 60%);
+  filter: blur(32px);
   animation: floatBlob 11s ease-in-out infinite alternate, ambientPulse 5.2s ease-in-out infinite reverse;
 }
 
@@ -191,6 +191,26 @@ html::before {
   50% {
     background-size: 135% 135%, 145% 145%, 130% 130%, 178% 166%, cover;
   }
+}
+
+@keyframes logoPulseToWhite {
+  0%,
+  100% {
+    color: #ffffff;
+    text-shadow: 0 0 0 rgba(255, 255, 255, 0);
+    filter: brightness(1);
+  }
+  50% {
+    color: #d9f5ff;
+    text-shadow: 0 0 10px rgba(217, 245, 255, 0.45);
+    filter: brightness(1.3);
+  }
+}
+
+.logo-pulse-word {
+  display: inline-block;
+  color: #ffffff;
+  animation: logoPulseToWhite 3.6s ease-in-out infinite;
 }
 
 .enter-card {
