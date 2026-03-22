@@ -74,7 +74,7 @@ async def housing_phase_2_baseline(state: dict) -> dict:
         f"{len(output.sub_markets)} sub-markets"
     )
 
-    phase_2_summary = await summarize_phase_output(
+    phase_2_summary = summarize_phase_output(
         "Housing Baseline (Phase 2)", output.model_dump_json(indent=2)
     )
 
@@ -143,7 +143,7 @@ Produce JSON matching this schema:
     output = MagnitudeEstimationOutput(**parsed)
     logger.info(f"Housing Phase 3 complete: {len(output.estimates)} estimates")
 
-    phase_3_summary = await summarize_phase_output(
+    phase_3_summary = summarize_phase_output(
         "Magnitude Estimates (Phase 3)", output.model_dump_json(indent=2)
     )
 
@@ -219,7 +219,7 @@ Produce JSON matching this schema:
         f"{len(output.temporal_sequence)} temporal effects"
     )
 
-    phase_4_summary = await summarize_phase_output(
+    phase_4_summary = summarize_phase_output(
         "Distributional & Temporal (Phase 4)", output.model_dump_json(indent=2)
     )
 

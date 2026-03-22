@@ -76,7 +76,7 @@ async def consumer_phase_2_passthrough(state: dict) -> dict:
         f"{len(output.category_baselines)} category baselines"
     )
 
-    phase_2_summary = await summarize_phase_output(
+    phase_2_summary = summarize_phase_output(
         "Pass-Through & Baseline (Phase 2)", output.model_dump_json(indent=2)
     )
 
@@ -110,7 +110,7 @@ async def consumer_phase_3_geo_behavioral(state: dict) -> dict:
     output = GeoBehavioralOutput(**parsed)
     logger.info(f"Consumer Phase 3 complete: {len(output.regional_impacts)} regions")
 
-    phase_3_summary = await summarize_phase_output(
+    phase_3_summary = summarize_phase_output(
         "Geographic & Behavioral (Phase 3)", output.model_dump_json(indent=2)
     )
 
@@ -148,7 +148,7 @@ async def consumer_phase_4_purchasing_power(state: dict) -> dict:
         f"{len(output.temporal_effects)} temporal effects"
     )
 
-    phase_4_summary = await summarize_phase_output(
+    phase_4_summary = summarize_phase_output(
         "Purchasing Power (Phase 4)", output.model_dump_json(indent=2)
     )
 
