@@ -78,7 +78,7 @@ async def prewarm_llm():
                     max_tokens=1,
                 )
                 logger.info("LLM pre-warm complete (OpenAI)")
-            elif provider == "google" and settings.google_api_key:
+            elif provider in ("google", "gemini") and (settings.google_api_key or settings.gemini_api_key):
                 # Google ADK / Gemini — import to trigger module init
                 try:
                     import google.adk  # noqa: F401
