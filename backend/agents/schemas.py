@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 
 # ---------------------------------------------------------------------------
-# Stage 0: Classifier Output (powered by Google ADK)
+# Stage 0: Classifier Output
 # ---------------------------------------------------------------------------
 
 class PolicyTaskType(str, Enum):

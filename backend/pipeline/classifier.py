@@ -114,31 +114,7 @@ async def run_classifier(state: PipelineState, emit: EventCallback) -> PipelineS
 
     result = None
 
-    # Try ADK Classifier first (Rudra's Google ADK agent — richer extraction)
-    try:
-        await _think("tool_call", "Invoking Google ADK classifier (Gemini Flash)", "1", "google_adk")
-        from backend.agents.classifier import run_classifier as adk_classify
-        adk_output = await adk_classify(state.query)
-        if adk_output and adk_output.confidence != "low":
-            await _think("tool_result", f"ADK classification: {adk_output.task_type} (confidence: {adk_output.confidence})", "1", "google_adk")
-            result = {
-                "policy_type": adk_output.task_type.value if hasattr(adk_output.task_type, "value") else str(adk_output.task_type),
-                "policy_name": adk_output.cleaned_query or state.query,
-                "parameters": adk_output.policy_params or {},
-                "affected_populations": [],
-            }
-            # Propagate cleaned_query so all downstream stages use the
-            # normalised version instead of the raw user input
-            if adk_output.cleaned_query:
-                await _think("reasoning", f"Normalized query: \"{adk_output.cleaned_query}\"", "1")
-                state.query = adk_output.cleaned_query
-        else:
-            confidence = adk_output.confidence if adk_output else "n/a"
-            await _think("tool_result", f"ADK returned low confidence ({confidence}), trying fallback", "1", "google_adk")
-    except Exception as exc:
-        await _think("tool_result", f"ADK unavailable ({type(exc).__name__}), trying LLM fallback", "1", "google_adk")
-
-    # Fall back to direct LLM classification
+    # Primary: direct LLM classification (fast model)
     if not result:
         try:
             await _think("tool_call", "Classifying via LLM (fast model)", "1", "llm_classify")

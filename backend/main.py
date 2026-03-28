@@ -79,13 +79,18 @@ async def prewarm_llm():
                 )
                 logger.info("LLM pre-warm complete (OpenAI)")
             elif provider in ("google", "gemini") and (settings.google_api_key or settings.gemini_api_key):
-                # Google ADK / Gemini — import to trigger module init
-                try:
-                    import google.adk  # noqa: F401
-
-                    logger.info("LLM pre-warm complete (Google ADK imported)")
-                except ImportError:
-                    pass
+                # Gemini — send a trivial request to warm the connection
+                import httpx
+                async with httpx.AsyncClient(timeout=30) as client:
+                    api_key = settings.gemini_api_key or settings.google_api_key
+                    model = settings.classifier_model_name
+                    await client.post(
+                        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                        params={"key": api_key},
+                        json={"contents": [{"parts": [{"text": "ping"}]}],
+                              "generationConfig": {"maxOutputTokens": 1}},
+                    )
+                logger.info("LLM pre-warm complete (Gemini)")
             elif provider == "anthropic" and settings.anthropic_api_key:
                 import anthropic
 
