@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     # --- App ---
     debug: bool = True
-    cors_origins: list[str] = ["http://localhost:3000"]
+    cors_origins: list[str] = ["http://localhost:3000", "http://localhost:3001"]
 
     # --- LLM settings (agent pipeline) ---
     # gemini_api_key is an alias for google_api_key, used by LangGraph agents
