@@ -698,7 +698,9 @@ function EmptySpotlight({ agentId, status }: { agentId: AgentId; status: "pendin
       <div className="text-white/30 text-lg font-medium mb-2">{meta.label}</div>
       <div className="text-white/15 text-base max-w-sm leading-relaxed">
         {status === "pending"
-          ? `Waiting for upstream agents...`
+          ? agentId === "classifier"
+            ? "Ready to classify policy query..."
+            : "Waiting for upstream agents..."
           : status === "running"
             ? "Processing — events will appear here..."
             : meta.description}
