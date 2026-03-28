@@ -71,14 +71,27 @@ async def _gemini(
     if json_mode:
         payload["generationConfig"]["responseMimeType"] = "application/json"
 
-    # Gemini 2.5 Flash uses thinking by default — needs longer timeout
+    import asyncio as _asyncio
+    import logging as _logging
+    _logger = _logging.getLogger(__name__)
+
+    # Retry on 503 (Gemini capacity spikes are transient)
+    max_retries = 3
     async with httpx.AsyncClient(timeout=120) as client:
-        resp = await client.post(
-            url,
-            params={"key": settings.gemini_api_key or settings.google_api_key},
-            json=payload,
-        )
-        resp.raise_for_status()
+        for attempt in range(max_retries):
+            resp = await client.post(
+                url,
+                params={"key": settings.gemini_api_key or settings.google_api_key},
+                json=payload,
+            )
+            if resp.status_code == 503 and attempt < max_retries - 1:
+                wait = 2 ** attempt
+                _logger.warning(f"Gemini 503 (attempt {attempt + 1}/{max_retries}), retrying in {wait}s")
+                await _asyncio.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
+
         data = resp.json()
 
         # Gemini 2.5 Flash (thinking model) returns multiple parts:
