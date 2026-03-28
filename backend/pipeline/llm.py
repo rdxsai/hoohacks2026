@@ -46,7 +46,7 @@ async def llm_chat(
     Returns:
         The assistant's response text, or None if no LLM keys are configured.
     """
-    if settings.google_api_key:
+    if settings.google_api_key or settings.gemini_api_key:
         return await _gemini(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
     if settings.openai_api_key:
         return await _openai(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
@@ -75,7 +75,7 @@ async def _gemini(
     async with httpx.AsyncClient(timeout=120) as client:
         resp = await client.post(
             url,
-            params={"key": settings.google_api_key},
+            params={"key": settings.gemini_api_key or settings.google_api_key},
             json=payload,
         )
         resp.raise_for_status()
