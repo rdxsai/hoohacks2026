@@ -158,7 +158,23 @@ def briefing_dict_to_analyst_briefing(briefing: dict[str, Any]) -> AnalystBriefi
     policy_spec = None
     ps = briefing.get("policy_spec") or briefing.get("policy_specification")
     if isinstance(ps, dict):
+        # Prefer top-level policy_type/income_effect_exists (set by
+        # _briefing_to_dict) but fall back to the nested policy_spec values.
+        policy_type = briefing.get("policy_type") or ps.get("policy_type", "")
+        income_effect_raw = briefing.get("income_effect_exists")
+        if income_effect_raw is None:
+            income_effect_raw = ps.get("income_effect_exists")
+        # Normalise to bool | None
+        if isinstance(income_effect_raw, str):
+            income_effect_exists = income_effect_raw.lower() in ("true", "yes", "1")
+        elif isinstance(income_effect_raw, bool):
+            income_effect_exists = income_effect_raw
+        else:
+            income_effect_exists = None
+
         policy_spec = PolicySpec(
+            policy_type=policy_type,
+            income_effect_exists=income_effect_exists,
             action=ps.get("action", ""),
             value=ps.get("value", ""),
             scope=ps.get("scope", ""),

@@ -298,9 +298,21 @@ def _briefing_to_dict(briefing: Any) -> dict[str, Any]:
         return {"summary": str(briefing)}
 
     # Flatten into the format downstream stages expect
+    # Lift policy_type and income_effect_exists to top level so downstream
+    # agents (synthesis, housing, consumer) can read them for mode gating.
+    ps = d.get("policy_spec") or {}
+    if isinstance(ps, dict):
+        policy_type = ps.get("policy_type", "")
+        income_effect_exists = ps.get("income_effect_exists")
+    else:
+        policy_type = ""
+        income_effect_exists = None
+
     result: dict[str, Any] = {
         "summary": d.get("executive_summary", ""),
         "executive_summary": d.get("executive_summary", ""),
+        "policy_type": policy_type,
+        "income_effect_exists": income_effect_exists,
         "key_findings": d.get("key_findings", []),
         "critical_uncertainties": d.get("critical_uncertainties", []),
         "policy_spec": d.get("policy_spec"),
