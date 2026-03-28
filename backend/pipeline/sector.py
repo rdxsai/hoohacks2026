@@ -826,6 +826,9 @@ async def _run_langgraph_sector(
         logger.info(f"Sector {sector}: ✅ LangGraph complete with {len(all_tool_records)} tool calls")
 
         report = convert_fn(final_report, all_tool_records)
+        # Preserve the original rich report so synthesis can access
+        # phase-level outputs (scorecards, magnitudes, pathways).
+        report._agentic_report = final_report  # type: ignore[attr-defined]
         logger.info(
             f"Sector {sector}: ✅ AGENTIC FLOW SUCCESS — "
             f"{len(report.direct_effects)} direct, "
