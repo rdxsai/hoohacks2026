@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from backend.agents._helpers import (
+    _run_code_phase,
     _run_react_phase,
     _run_reasoning_phase,
     summarize_phase_output,
@@ -65,7 +66,7 @@ async def synthesis_phase_1_audit(state: dict) -> dict:
 
 
 async def synthesis_phase_2_impact(state: dict) -> dict:
-    """Phase 2: Net Household Impact Computation — code_execute."""
+    """Phase 2: Net Household Impact Computation — deterministic code_execute."""
     logger.info("=== SYNTHESIS PHASE 2: Net Impact Computation ===")
 
     user_msg = phase_2_system_prompt(
@@ -75,13 +76,10 @@ async def synthesis_phase_2_impact(state: dict) -> dict:
         phase_1_summary=state.get("phase_1_summary"),
     )
 
-    parsed, tool_records = await _run_react_phase(
+    parsed, tool_records = await _run_code_phase(
         system_prompt=SYNTHESIS_IDENTITY_SHORT,
         user_message=user_msg,
-        tools=SYNTHESIS_PHASE_2_TOOLS,
         phase_num=2,
-        state=state,
-        recursion_limit=30,
     )
 
     output = NetImpactOutput(**parsed)
@@ -107,13 +105,11 @@ async def synthesis_phase_3_winners(state: dict) -> dict:
         phase_2_summary=state.get("phase_2_summary"),
     )
 
-    parsed, tool_records = await _run_react_phase(
+    # Winners/Losers is primarily classification over Phase 2 numbers —
+    # reasoning-only is faster and sufficient (no computation needed).
+    parsed = await _run_reasoning_phase(
         system_prompt=SYNTHESIS_IDENTITY_SHORT,
         user_message=user_msg,
-        tools=SYNTHESIS_PHASE_3_TOOLS,
-        phase_num=3,
-        state=state,
-        recursion_limit=20,
     )
 
     output = WinnersLosersOutput(**parsed)
@@ -130,7 +126,6 @@ async def synthesis_phase_3_winners(state: dict) -> dict:
         "current_phase": 4,
         "phase_3_output": output,
         "phase_3_summary": phase_3_summary,
-        "tool_call_log": state.get("tool_call_log", []) + tool_records,
     }
 
 
@@ -176,13 +171,10 @@ async def synthesis_phase_5_payload(state: dict) -> dict:
         phase_4_summary=state.get("phase_4_summary"),
     )
 
-    parsed, tool_records = await _run_react_phase(
+    parsed, tool_records = await _run_code_phase(
         system_prompt=SYNTHESIS_IDENTITY_SHORT,
         user_message=user_msg,
-        tools=SYNTHESIS_PHASE_5_TOOLS,
         phase_num=5,
-        state=state,
-        recursion_limit=30,
     )
 
     report = SynthesisReport(**parsed)

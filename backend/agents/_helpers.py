@@ -209,3 +209,109 @@ async def _run_reasoning_phase(
     )
 
     return _extract_json_block(response.content)
+
+
+async def _run_code_phase(
+    system_prompt: str,
+    user_message: str,
+    phase_num: int,
+) -> tuple[dict, list[ToolCallRecord]]:
+    """Two-step LLM→code_execute→LLM pattern for deterministic math phases.
+
+    Step 1: LLM generates Python code to compute results.
+    Step 2: Execute the code in the sandbox.
+    Step 3: LLM formats the execution result into the required JSON schema.
+
+    Much faster than ReAct for phases that only need code_execute — cuts
+    LLM round-trips from ~5 to 2 and removes the agent decision loop.
+    """
+    from backend.tools.code_execute import code_execute
+
+    llm = get_chat_model()
+
+    logger.info(f"Phase {phase_num} (code_phase): generating computation code")
+
+    # Step 1: Ask LLM to produce Python code
+    code_prompt = (
+        f"{system_prompt}\n\n"
+        "IMPORTANT: Instead of calling tools, write a SINGLE Python code block that "
+        "computes ALL required values. Available: math, statistics, json, Decimal. "
+        "Assign the final answer to a variable named `result` as a dict. "
+        "Wrap your code in ```python ... ```."
+    )
+
+    code_response = await llm.ainvoke(
+        [SystemMessage(content=code_prompt), HumanMessage(content=user_message)]
+    )
+
+    code_text = code_response.content
+    if not isinstance(code_text, str):
+        if isinstance(code_text, list):
+            code_text = "\n".join(
+                p["text"] if isinstance(p, dict) and "text" in p else str(p)
+                for p in code_text
+            )
+        else:
+            code_text = str(code_text)
+
+    # Extract Python code from fence
+    import re
+    code_match = re.search(r"```(?:python)?\s*(.*?)\s*```", code_text, re.DOTALL)
+    if not code_match:
+        # No code block — fall back to reasoning-only (LLM produced JSON directly)
+        logger.warning(f"Phase {phase_num}: LLM produced no code block, trying direct JSON parse")
+        try:
+            return _extract_json_block(code_text), []
+        except (ValueError, json.JSONDecodeError):
+            # Last resort: ask again for JSON
+            followup = await llm.ainvoke(
+                [SystemMessage(content=system_prompt), HumanMessage(content=user_message)]
+            )
+            return _extract_json_block(followup.content), []
+
+    code = code_match.group(1).strip()
+    logger.info(f"Phase {phase_num}: executing {len(code)} chars of generated code")
+
+    # Step 2: Execute
+    exec_result = await code_execute(code=code)
+    tool_record = ToolCallRecord(
+        phase=phase_num,
+        tool_name="code_execute",
+        arguments={"code_length": len(code)},
+        result_summary=(exec_result.result or exec_result.stdout or exec_result.error or "")[:200],
+        timestamp=datetime.now(timezone.utc).isoformat(),
+    )
+
+    if exec_result.error:
+        logger.warning(f"Phase {phase_num}: code execution error: {exec_result.error}")
+        # Feed the error back to LLM for a retry
+        retry_response = await llm.ainvoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_message),
+            HumanMessage(
+                content=f"Your code had an error: {exec_result.error}\n"
+                "Fix the code and try again. Wrap in ```python ... ```."
+            ),
+        ])
+        retry_text = retry_response.content if isinstance(retry_response.content, str) else str(retry_response.content)
+        retry_match = re.search(r"```(?:python)?\s*(.*?)\s*```", retry_text, re.DOTALL)
+        if retry_match:
+            exec_result = await code_execute(code=retry_match.group(1).strip())
+            tool_record.result_summary = (exec_result.result or exec_result.error or "")[:200]
+
+    # Step 3: LLM formats execution output into the required JSON schema
+    computation_data = exec_result.result or exec_result.stdout or "{}"
+    format_response = await llm.ainvoke([
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=(
+            f"Here are the computed results:\n```\n{computation_data}\n```\n\n"
+            "Format these into the required JSON schema. "
+            "Do NOT recompute — use the numbers above exactly. "
+            "Produce JSON in ```json ... ``` code fence."
+        )),
+    ])
+
+    parsed = _extract_json_block(format_response.content)
+    logger.info(f"Phase {phase_num} (code_phase) complete: 2 LLM calls + 1 code_execute")
+
+    return parsed, [tool_record]
