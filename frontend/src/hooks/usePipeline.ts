@@ -3,7 +3,7 @@ import { buildMockTimeline } from "@/lib/mockEvents";
 import type { PipelineEvent, PipelineState, ThinkingStep } from "@/types/pipeline";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const DEFAULT_AGENTS = ["Labor", "Consumer", "Business", "Housing"];
+const DEFAULT_AGENTS = ["Housing", "Consumer"];
 
 let _thinkingIdCounter = 0;
 

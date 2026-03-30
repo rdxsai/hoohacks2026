@@ -16,21 +16,19 @@ interface AgentFeedProps {
 }
 
 // ─── Agent identifiers used throughout ────────────────────────────────────
-type AgentId = "classifier" | "analyst" | "lightning" | "Labor" | "Housing" | "Consumer" | "Business" | "synthesis";
+type AgentId = "classifier" | "analyst" | "lightning" | "Housing" | "Consumer" | "synthesis";
 
-const AGENT_ORDER: AgentId[] = ["classifier", "analyst", "lightning", "Labor", "Housing", "Consumer", "Business", "synthesis"];
+const AGENT_ORDER: AgentId[] = ["classifier", "analyst", "lightning", "Housing", "Consumer", "synthesis"];
 
 /** Only actual agents shown in the left rail (Lightning is a payment layer, shown separately) */
-const RAIL_AGENTS: AgentId[] = ["classifier", "analyst", "Labor", "Housing", "Consumer", "Business", "synthesis"];
+const RAIL_AGENTS: AgentId[] = ["classifier", "analyst", "Housing", "Consumer", "synthesis"];
 
 const AGENT_META: Record<AgentId, { label: string; icon: string; color: string; description: string }> = {
   classifier:  { label: "Classifier",  icon: "C", color: "sky",    description: "Parsing policy type & parameters" },
   analyst:     { label: "Analyst",     icon: "A", color: "blue",   description: "5-phase data gathering & briefing" },
   lightning:   { label: "Lightning",   icon: "⚡", color: "amber",  description: "L402 premium data payments" },
-  Labor:       { label: "Labor",       icon: "L", color: "emerald", description: "Employment, wages & workforce" },
   Housing:     { label: "Housing",     icon: "H", color: "purple", description: "Housing demand, rents & mobility" },
   Consumer:    { label: "Consumer",    icon: "Co", color: "pink",   description: "Prices, purchasing power & spending" },
-  Business:    { label: "Business",    icon: "B", color: "orange", description: "Margins, closures & automation" },
   synthesis:   { label: "Synthesis",   icon: "S", color: "rose",   description: "5-phase aggregation & report" },
 };
 
@@ -71,7 +69,7 @@ function getActiveAgent(state: PipelineState): AgentId {
   if ((state.synthesisPhase || state.synthesisThinkingSteps.length > 0) && !state.synthesis) return "synthesis";
 
   // Stage 2: Sector agents — pick the one with most recent thinking step
-  const sectorIds = ["Labor", "Housing", "Consumer", "Business"] as AgentId[];
+  const sectorIds = ["Housing", "Consumer"] as AgentId[];
   const runningAgents = sectorIds.filter(id => state.sectorAgents[id]?.status === "running");
   if (runningAgents.length > 0) {
     let best = runningAgents[0];
@@ -747,7 +745,7 @@ function SpotlightPanel({
   const textColor = textColorMap[meta.color] ?? "text-white/70";
 
   // Sector agent metadata
-  const sectorData = (["Labor", "Housing", "Consumer", "Business"] as const).includes(agentId as any)
+  const sectorData = (["Housing", "Consumer"] as const).includes(agentId as any)
     ? state.sectorAgents[agentId]
     : null;
 

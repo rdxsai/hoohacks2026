@@ -21,7 +21,7 @@ export interface ToolCallRecord {
 export type AgentMode = "agentic" | "single_shot";
 
 export interface SectorReport {
-  sector: "labor" | "housing" | "consumer" | "business";
+  sector: "housing" | "consumer";
   direct_effects: CausalClaim[];
   second_order_effects: CausalClaim[];
   feedback_loops: CausalClaim[];
