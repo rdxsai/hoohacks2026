@@ -57,6 +57,13 @@ async def health():
     return {"status": "ok"}
 
 
+@app.on_event("shutdown")
+async def shutdown():
+    """Close shared HTTP client on shutdown."""
+    from backend.tools._http import close_http_client
+    await close_http_client()
+
+
 @app.on_event("startup")
 async def prewarm_llm():
     """Pre-warm LLM connection on startup so the first real request doesn't stall.
