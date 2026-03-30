@@ -159,12 +159,45 @@ def summarize_phase_output(phase_name: str, output_json: str) -> str:
     try:
         data = _json.loads(output_json)
     except (ValueError, TypeError):
-        # If not valid JSON, truncate the raw text
         return output_json[:2000]
+
+    # Evidence phase gets more generous limits — study details are where
+    # the analytical value lives.
+    is_evidence = "evidence" in phase_name.lower()
+    str_limit = 400 if is_evidence else 200
+    line_cap = 80 if is_evidence else 60
 
     lines = [f"[{phase_name}]"]
 
-    # Walk the dict and extract key-value pairs with numbers or short strings
+    def _extract_evidence_item(item: dict, prefix: str) -> None:
+        """Extract the fields that matter from an EvidenceItem."""
+        title = item.get("title", "")
+        finding = item.get("key_finding", "")
+        effect = item.get("effect_size", "")
+        confidence = item.get("confidence", "")
+        authors = item.get("authors", "")
+        year = item.get("year", "")
+        applicability = item.get("applicability", "")
+
+        header = f"{prefix}{title}"
+        if authors:
+            header += f" ({authors}, {year})" if year else f" ({authors})"
+        elif year:
+            header += f" ({year})"
+        if confidence:
+            header += f" [{confidence}]"
+        lines.append(header)
+
+        if finding:
+            lines.append(f"{prefix}  finding: {finding[:400]}")
+        if effect:
+            lines.append(f"{prefix}  effect: {effect[:300]}")
+        if applicability:
+            lines.append(f"{prefix}  applicability: {applicability[:300]}")
+
+    def _is_evidence_item(item: dict) -> bool:
+        return "key_finding" in item or "effect_size" in item or "source_type" in item
+
     def _extract(obj, prefix="", depth=0):
         if depth > 3:
             return
@@ -172,7 +205,7 @@ def summarize_phase_output(phase_name: str, output_json: str) -> str:
             for k, v in obj.items():
                 if isinstance(v, (int, float)):
                     lines.append(f"{prefix}{k}: {v}")
-                elif isinstance(v, str) and len(v) < 200 and v:
+                elif isinstance(v, str) and len(v) < str_limit and v:
                     lines.append(f"{prefix}{k}: {v}")
                 elif isinstance(v, list) and len(v) <= 5 and all(isinstance(x, str) for x in v):
                     lines.append(f"{prefix}{k}: {', '.join(v[:5])}")
@@ -181,18 +214,22 @@ def summarize_phase_output(phase_name: str, output_json: str) -> str:
         elif isinstance(obj, list):
             for i, item in enumerate(obj[:8]):
                 if isinstance(item, dict):
-                    # Extract the most identifying fields
-                    name = item.get("name") or item.get("metric_name") or item.get("region") or item.get("region_name") or item.get("pathway_id") or ""
+                    # Evidence items get special extraction
+                    if _is_evidence_item(item):
+                        _extract_evidence_item(item, f"{prefix}[{i}] ")
+                        continue
+                    # Generic: try identifying fields
+                    name = item.get("name") or item.get("metric_name") or item.get("region") or item.get("region_name") or item.get("pathway_id") or item.get("title") or ""
                     value = item.get("value") or item.get("central_estimate") or item.get("latest_value") or ""
                     extra = item.get("trend") or item.get("confidence") or item.get("relevance") or item.get("verdict") or ""
                     if name or value:
                         lines.append(f"{prefix}[{i}] {name}: {value} {extra}".strip())
-                elif isinstance(item, str) and len(item) < 150:
+                elif isinstance(item, str) and len(item) < str_limit:
                     lines.append(f"{prefix}[{i}] {item}")
 
     _extract(data)
 
-    result = "\n".join(lines[:60])  # Cap at 60 lines
+    result = "\n".join(lines[:line_cap])
     logger.info(f"Summarized {phase_name}: {len(output_json)} chars → {len(result)} chars (programmatic)")
     return result
 
