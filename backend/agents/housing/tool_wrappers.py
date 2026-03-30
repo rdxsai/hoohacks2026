@@ -12,6 +12,8 @@ from backend.tools import (
 )
 
 # Reuse existing wrappers from the analyst agent
+import time
+
 from backend.agents.tool_wrappers import (
     fred_search,
     fred_get_series,
@@ -21,6 +23,7 @@ from backend.agents.tool_wrappers import (
     fetch_document_text,
     search_openalex,
     _error_json,
+    _record_timing,
 )
 
 
@@ -50,6 +53,7 @@ async def census_acs_query(
 
     IMPORTANT: For state-level queries, set state_fips to empty string ''.
     The 'in state:XX' filter only applies when querying within a state (county, tract)."""
+    t0 = time.perf_counter()
     try:
         result = await _census_acs_query(
             table_variables=table_variables,
@@ -58,8 +62,10 @@ async def census_acs_query(
             year=year,
             dataset=dataset,
         )
+        _record_timing("census_acs_query", geography, (time.perf_counter() - t0) * 1000, True)
         return result.model_dump_json(indent=2)
     except Exception as e:
+        _record_timing("census_acs_query", geography, (time.perf_counter() - t0) * 1000, False)
         return _error_json("census_acs_query", e)
 
 
@@ -74,6 +80,7 @@ async def bea_regional_data(
     Key tables: SARPP (state price parities, line_code=1 for all items, 2 for rents),
     MARPP (metro price parities), CAINC1 (personal income).
     geo_fips: '51000' for Virginia, '51013' for Arlington County."""
+    t0 = time.perf_counter()
     try:
         result = await _bea_regional_data(
             table_name=table_name,
@@ -81,8 +88,10 @@ async def bea_regional_data(
             year=year,
             line_code=line_code,
         )
+        _record_timing("bea_regional_data", f"{table_name}/{geo_fips}", (time.perf_counter() - t0) * 1000, True)
         return result.model_dump_json(indent=2)
     except Exception as e:
+        _record_timing("bea_regional_data", f"{table_name}/{geo_fips}", (time.perf_counter() - t0) * 1000, False)
         return _error_json("bea_regional_data", e)
 
 
@@ -102,6 +111,7 @@ async def hud_data(
 
     FMR returns benchmark rents by bedroom count (0BR through 4BR).
     Income Limits returns low/very-low/extremely-low income thresholds."""
+    t0 = time.perf_counter()
     try:
         result = await _hud_data(
             dataset=dataset,
@@ -109,8 +119,10 @@ async def hud_data(
             year=year,
             quarter=quarter,
         )
+        _record_timing("hud_data", f"{dataset}/{entity_id}", (time.perf_counter() - t0) * 1000, True)
         return result.model_dump_json(indent=2)
     except Exception as e:
+        _record_timing("hud_data", f"{dataset}/{entity_id}", (time.perf_counter() - t0) * 1000, False)
         return _error_json("hud_data", e)
 
 
@@ -120,10 +132,13 @@ async def code_execute(code: str) -> str:
     elasticities, affordability ratios, dollar impact estimates. Available: math,
     statistics, json, Decimal. Assign your answer to a variable named `result`.
     Example: result = round(1800 / (55000/12) * 100, 1)  # rent-to-income %"""
+    t0 = time.perf_counter()
     try:
         result = await _code_execute(code=code)
+        _record_timing("code_execute", code[:40], (time.perf_counter() - t0) * 1000, not result.error)
         return result.model_dump_json(indent=2)
     except Exception as e:
+        _record_timing("code_execute", code[:40], (time.perf_counter() - t0) * 1000, False)
         return _error_json("code_execute", e)
 
 

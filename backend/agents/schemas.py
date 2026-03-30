@@ -201,3 +201,4 @@ class ToolCallRecord(BaseModel):
     arguments: dict = Field(default_factory=dict)
     result_summary: str = ""
     timestamp: str = ""
+    duration_ms: float = 0.0
