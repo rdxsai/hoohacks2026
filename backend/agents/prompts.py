@@ -271,11 +271,15 @@ def phase_5_system_prompt(
     phase_3: TransmissionMapOutput,
     phase_4: EvidenceOutput,
 ) -> str:
+    from backend.agents._helpers import summarize_phase_output
+
     schema_json = AnalystBriefing.model_json_schema()
     phase_1_json = phase_1.model_dump_json(indent=2)
-    phase_2_json = phase_2.model_dump_json(indent=2)
+    # Summarize bulky phases to cut prompt size (~4K tokens saved)
+    phase_2_summary = summarize_phase_output("Baseline", phase_2.model_dump_json())
     phase_3_json = phase_3.model_dump_json(indent=2)
-    phase_4_json = phase_4.model_dump_json(indent=2)
+    phase_4_summary = summarize_phase_output("Evidence", phase_4.model_dump_json())
+
     return f"""{CORE_IDENTITY}
 
 ## YOUR CURRENT TASK: PHASE 5 — SYNTHESIS & BRIEFING PRODUCTION
@@ -291,20 +295,16 @@ You have NO tools available. Synthesize all prior phase outputs into the final a
 {phase_1_json}
 ```
 
-**Phase 2 — Baseline & Counterfactual:**
-```json
-{phase_2_json}
-```
+**Phase 2 — Baseline & Counterfactual (summary):**
+{phase_2_summary}
 
 **Phase 3 — Transmission Channels:**
 ```json
 {phase_3_json}
 ```
 
-**Phase 4 — Evidence Base:**
-```json
-{phase_4_json}
-```
+**Phase 4 — Evidence Base (summary):**
+{phase_4_summary}
 
 **Produce a comprehensive analyst briefing with:**
 1. Executive Summary: 3-5 key findings with confidence levels, critical uncertainties
