@@ -121,7 +121,9 @@ class TransmissionMapOutput(BaseModel):
 # ---------------------------------------------------------------------------
 
 class EvidenceItem(BaseModel):
-    channel_name: str
+    model_config = {"coerce_numbers_to_str": True}
+
+    channel_name: str = ""
     source_type: str = ""
     title: str = ""
     authors: str | None = ""

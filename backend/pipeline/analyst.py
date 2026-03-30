@@ -469,11 +469,42 @@ async def _run_simple_analyst(state: PipelineState, emit: EventCallback) -> Pipe
         "data": {"step_type": "phase_complete", "content": "Briefing assembled", "phase": "1"},
     })
 
+    # Map classifier policy_type to the analyst's LABOR_COST/TRADE/etc taxonomy
+    # so downstream mode gating still works even in simple fallback mode.
+    _classifier_to_analyst_type = {
+        "labor": "LABOR_COST", "minimum_wage": "LABOR_COST",
+        "trade": "TRADE", "trade_tariff": "TRADE", "tariff": "TRADE",
+        "immigration": "LABOR_COST",
+        "education_finance": "TRANSFER", "education": "TRANSFER",
+        "tax_policy": "TAX_FISCAL", "tax": "TAX_FISCAL",
+        "housing_regulation": "LAND_USE", "housing": "LAND_USE",
+        "healthcare": "REGULATORY_COST",
+        "environmental": "REGULATORY_COST",
+    }
+    _income_effect_by_type = {
+        "LABOR_COST": True, "TRANSFER": True, "TAX_FISCAL": True,
+        "TRADE": None, "REGULATORY_COST": False, "LAND_USE": False,
+    }
+    classifier_type = state.policy_type or ""
+    analyst_type = _classifier_to_analyst_type.get(classifier_type, "OTHER")
+    income_effect = _income_effect_by_type.get(analyst_type)
+
     state.briefing = {
         "raw_data": briefing_data,
         "summary": briefing_summary,
         "tool_calls": tool_records,
         "policy_params": state.policy_params,
+        "policy_type": analyst_type,
+        "income_effect_exists": income_effect,
+        "policy_spec": {
+            "policy_type": analyst_type,
+            "income_effect_exists": income_effect,
+            "action": state.policy_params.get("policy_name", ""),
+            "value": "",
+            "scope": "",
+            "timeline": "",
+            "current_baseline": "",
+        },
     }
     state.tool_calls = tool_records
 
