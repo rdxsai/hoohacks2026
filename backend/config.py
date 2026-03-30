@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     gemini_api_key: Optional[str] = Field(None, description="Google Gemini API key (falls back to google_api_key)")
 
     llm_provider: str = Field("gemini", description="LLM provider: gemini, openai, or anthropic")
-    llm_model_name: str = Field("gemini-3-flash-preview", description="LLM model name")
-    classifier_model_name: str = Field("gemini-3-flash-preview", description="Fast model for Stage 0 classifier")
+    llm_model_name: str = Field("gemini-2.5-flash", description="LLM model name")
+    classifier_model_name: str = Field("gemini-2.5-flash", description="Fast model for Stage 0 classifier")
 
     def model_post_init(self, __context: Any) -> None:
         """Ensure gemini_api_key falls back to google_api_key if not set."""
