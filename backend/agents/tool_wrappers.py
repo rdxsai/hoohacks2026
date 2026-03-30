@@ -8,6 +8,7 @@ from langchain_core.tools import tool
 from backend.tools import (
     fred_search as _fred_search,
     fred_get_series as _fred_get_series,
+    fred_get_many as _fred_get_many,
     bls_get_data as _bls_get_data,
     search_academic_papers as _search_academic_papers,
     search_openalex as _search_openalex,
@@ -65,6 +66,19 @@ async def fred_get_series(series_id: str, start_date: str = "2019-01-01") -> str
         return result.model_dump_json(indent=2)
     except Exception as e:
         return _error_json("fred_get_series", e)
+
+
+@tool
+async def fred_get_many(series_ids: list[str], start_date: str = "2019-01-01") -> str:
+    """Fetch MULTIPLE FRED series in ONE call (parallel). Much faster than
+    calling fred_get_series repeatedly. Pass a list of series IDs.
+    Example: fred_get_many(["UNRATE", "CPIAUCSL", "FEDMINNFRWG"])
+    Returns all results plus any per-series errors."""
+    try:
+        result = await _fred_get_many(series_ids=series_ids, start_date=start_date)
+        return result.model_dump_json(indent=2)
+    except Exception as e:
+        return _error_json("fred_get_many", e)
 
 
 @tool
@@ -155,8 +169,8 @@ async def fetch_document_text(url: str, max_chars: int = 4000) -> str:
 # Phase-to-tool mapping
 # ---------------------------------------------------------------------------
 
-PHASE_1_TOOLS = [web_search_news, fetch_document_text, fred_get_series]
-PHASE_2_TOOLS = [fred_search, fred_get_series, bls_get_data]
+PHASE_1_TOOLS = [web_search_news, fetch_document_text, fred_get_series, fred_get_many]
+PHASE_2_TOOLS = [fred_search, fred_get_series, fred_get_many, bls_get_data]
 PHASE_3_TOOLS = []  # No tools — pure reasoning
 PHASE_4_TOOLS = [
     search_academic_papers,

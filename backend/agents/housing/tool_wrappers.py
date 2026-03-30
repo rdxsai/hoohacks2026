@@ -15,6 +15,7 @@ from backend.tools import (
 from backend.agents.tool_wrappers import (
     fred_search,
     fred_get_series,
+    fred_get_many,
     bls_get_data,
     web_search_news,
     fetch_document_text,
@@ -135,6 +136,7 @@ HOUSING_PHASE_1_TOOLS = []  # No tools — reasoning from briefing
 HOUSING_PHASE_2_TOOLS = [
     fred_search,
     fred_get_series,
+    fred_get_many,
     bls_get_data,
     census_acs_query,
     bea_regional_data,
@@ -145,6 +147,7 @@ HOUSING_PHASE_2_TOOLS = [
 HOUSING_PHASE_3_TOOLS = [
     code_execute,
     fred_get_series,
+    fred_get_many,
     bls_get_data,
     census_acs_query,
     hud_data,

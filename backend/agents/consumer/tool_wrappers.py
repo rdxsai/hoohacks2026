@@ -4,6 +4,7 @@ from __future__ import annotations
 from backend.agents.tool_wrappers import (
     fred_search,
     fred_get_series,
+    fred_get_many,
     bls_get_data,
     web_search_news,
     fetch_document_text,
@@ -27,6 +28,7 @@ CONSUMER_PHASE_2_TOOLS = [
     bls_get_data,       # CPI by category, PPI, import prices
     fred_search,        # Discover income/spending/price series
     fred_get_series,    # PCE, disposable income, consumer sentiment
+    fred_get_many,      # Batch fetch multiple FRED series at once
     census_acs_query,   # Income distribution by county
     bea_regional_data,  # Regional price parities
     search_openalex,    # Pass-through research, elasticity studies

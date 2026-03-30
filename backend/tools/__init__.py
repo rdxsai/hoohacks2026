@@ -1,5 +1,6 @@
 from backend.tools.fred_search import fred_search
 from backend.tools.fred_get_series import fred_get_series
+from backend.tools.fred_get_many import fred_get_many
 from backend.tools.bls_get_data import bls_get_data
 from backend.tools.search_academic_papers import search_academic_papers
 from backend.tools.search_openalex import search_openalex
@@ -16,6 +17,7 @@ from backend.tools.run_scenario_analysis import run_scenario_analysis
 __all__ = [
     "fred_search",
     "fred_get_series",
+    "fred_get_many",
     "bls_get_data",
     "search_academic_papers",
     "search_openalex",

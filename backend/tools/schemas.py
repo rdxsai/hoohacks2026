@@ -43,6 +43,11 @@ class FredSeriesOutput(BaseModel):
     total_observations: int
 
 
+class FredBatchOutput(BaseModel):
+    results: list[FredSeriesOutput]
+    errors: dict[str, str] = Field(default_factory=dict)  # series_id → error message
+
+
 # ---------------------------------------------------------------------------
 # BLS Get Data
 # ---------------------------------------------------------------------------
