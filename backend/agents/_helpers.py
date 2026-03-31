@@ -123,6 +123,7 @@ async def _run_react_phase(
     input_msg = {"messages": [HumanMessage(content=user_message)]}
     tool_records: list[ToolCallRecord] = []
     final_messages: list = []
+    _reasoning_buffer: list[str] = []  # accumulate tokens into chunks
 
     async for event in agent.astream_events(
         input_msg,
@@ -172,11 +173,62 @@ async def _run_react_phase(
                 except Exception:
                     pass
 
+        # LLM reasoning tokens — buffer into chunks and dispatch.
+        # GPT-4o-mini streams token-by-token; we accumulate and flush
+        # at sentence boundaries or every ~80 chars for smooth UI display.
+        elif kind == "on_chat_model_stream":
+            chunk = data.get("chunk")
+            if chunk and parent_config:
+                content = getattr(chunk, "content", None)
+                if isinstance(content, str) and content:
+                    _reasoning_buffer.append(content)
+                    buffered = "".join(_reasoning_buffer)
+
+                    # Flush at sentence boundary or buffer threshold
+                    should_flush = (
+                        len(buffered) > 80
+                        or buffered.rstrip().endswith((".", "!", "?", ":", ";"))
+                    )
+                    if should_flush:
+                        text = buffered.strip()
+                        _reasoning_buffer.clear()
+
+                        # Only pass through natural language — skip JSON output.
+                        # LLMs in ReAct mode produce JSON directly as their output;
+                        # natural language only appears in the final synthesis turn.
+                        is_json = (
+                            text.startswith(("```", '{"', '"', "}", "{", "[", "]"))
+                            or '": ' in text
+                            or text.endswith((",", "{", "[", '",'))
+                            or text.startswith(("true", "false", "null"))
+                        )
+                        if text and not is_json:
+                            try:
+                                await adispatch_custom_event("agent_reasoning", {
+                                    "content": text[:500],
+                                    "phase": str(phase_num),
+                                }, config=parent_config)
+                            except Exception:
+                                pass
+
         # Capture final messages from the outermost chain completion
         elif kind == "on_chain_end" and name == "LangGraph":
             output = data.get("output", {})
             if isinstance(output, dict) and "messages" in output:
                 final_messages = output["messages"]
+
+    # Flush any remaining reasoning buffer
+    if _reasoning_buffer and parent_config:
+        text = "".join(_reasoning_buffer).strip()
+        if text and not text.startswith(("```", '{"', '"', "}", "{")):
+            try:
+                await adispatch_custom_event("agent_reasoning", {
+                    "content": text[:500],
+                    "phase": str(phase_num),
+                }, config=parent_config)
+            except Exception:
+                pass
+        _reasoning_buffer.clear()
 
     logger.info(f"Phase {phase_num} message count: {len(final_messages)}, tool calls: {len(tool_records)}")
 

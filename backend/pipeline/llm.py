@@ -46,10 +46,19 @@ async def llm_chat(
     Returns:
         The assistant's response text, or None if no LLM keys are configured.
     """
-    if settings.google_api_key or settings.gemini_api_key:
+    # Respect LLM_PROVIDER setting, fall back to key detection
+    provider = settings.llm_provider.lower()
+    if provider == "openai" and settings.openai_api_key:
+        return await _openai(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
+    if provider in ("gemini", "google") and (settings.google_api_key or settings.gemini_api_key):
         return await _gemini(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
+    if provider == "anthropic" and settings.anthropic_api_key:
+        return await _anthropic(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
+    # Fallback: try any available key
     if settings.openai_api_key:
         return await _openai(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
+    if settings.google_api_key or settings.gemini_api_key:
+        return await _gemini(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
     if settings.anthropic_api_key:
         return await _anthropic(system_prompt, user_prompt, json_mode, temperature, max_tokens, fast)
     return None
@@ -108,7 +117,7 @@ async def _gemini(
 async def _openai(
     system: str, user: str, json_mode: bool, temp: float, max_tokens: int, fast: bool
 ) -> str:
-    model = "gpt-4o-mini" if fast else "gpt-4o"
+    model = settings.classifier_model_name if fast else settings.llm_model_name
     url = "https://api.openai.com/v1/chat/completions"
     payload: dict[str, Any] = {
         "model": model,
