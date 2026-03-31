@@ -286,8 +286,11 @@ async def _run_react_phase(
                         "phase": str(phase_num),
                         "reasoning": _pending_reasoning if _pending_reasoning else None,
                     }, config=parent_config)
-                except Exception:
-                    pass
+                    logger.info(f"Phase {phase_num} dispatched tool_complete for {name}")
+                except Exception as dispatch_err:
+                    logger.error(f"Phase {phase_num} tool_complete dispatch FAILED: {dispatch_err}")
+            else:
+                logger.warning(f"Phase {phase_num} no parent_config — cannot dispatch tool_complete")
             _pending_tool = None
             _pending_reasoning = ""  # Clear after attaching to tool event
 

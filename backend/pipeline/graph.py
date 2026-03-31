@@ -56,14 +56,10 @@ async def _run_subgraph(
             if isinstance(output, dict) and name not in ("LangGraph",):
                 final_state.update(output)
 
-        # Forward custom events from inner graph to parent pipeline.
-        # These come from _run_react_phase dispatching "tool_activity"
-        # events as it streams the ReAct agent.
+        # Custom events auto-propagate through astream_events chain —
+        # no re-dispatch needed. Just log for diagnostics.
         elif kind == "on_custom_event":
-            try:
-                await adispatch_custom_event(name, data, config=config)
-            except Exception:
-                pass
+            logger.info(f"[_run_subgraph/{agent_name}] custom event seen: {name} (auto-propagates)")
 
     return final_state
 
