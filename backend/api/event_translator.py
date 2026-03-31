@@ -1,11 +1,8 @@
 """
 Translate LangGraph astream_events into frontend PipelineEvent format.
 
-LangGraph emits structured events: on_chain_start, on_chain_end,
-on_tool_start, on_tool_end, on_chat_model_start, on_chat_model_stream,
-on_custom_event. This module maps them to the event types the frontend
-expects (classifier_complete, analyst_tool_call, sector_agent_started, etc.)
-so zero frontend changes are needed.
+Uses a stateful translator that tracks which top-level node is active
+to correctly attribute tool calls and LLM events to their agent.
 """
 
 from __future__ import annotations
@@ -14,240 +11,338 @@ import time
 from typing import Any
 
 
-# Maps sub-graph node names to the agent that owns them
-_ANALYST_PHASES = {
-    "phase_1_policy_spec", "phase_2_baseline", "phase_3_transmission",
-    "phase_4_evidence", "phase_5_synthesis",
-}
-_HOUSING_PHASES = {
-    "phase_1_pathways", "phase_2_baseline", "phase_3_magnitudes",
-    "phase_4_distributional", "phase_5_scorecard", "phase_5_minimal",
-}
-_CONSUMER_PHASES = {
-    "phase_1_shock", "phase_2_passthrough", "phase_3_geo_behavioral",
-    "phase_4_purchasing_power", "phase_5_scorecard", "phase_5_minimal",
-}
-_SYNTHESIS_PHASES = {
-    "phase_1_audit", "phase_2_impact", "phase_3_winners",
-    "phase_4_narrative", "phase_5_payload",
+# Top-level pipeline nodes → agent names
+_TOP_NODES = {
+    "classifier_node": "classifier",
+    "analyst_node": "analyst",
+    "premium_node": "lightning",
+    "housing_node": "Housing",
+    "consumer_node": "Consumer",
+    "sector_barrier": None,
+    "synthesis_node": "synthesis",
 }
 
-_PHASE_LABELS = {
-    # Analyst
-    "phase_1_policy_spec": "Policy Specification",
-    "phase_2_baseline": "Baseline & Counterfactual",
-    "phase_3_transmission": "Transmission Mapping",
-    "phase_4_evidence": "Evidence Gathering",
-    "phase_5_synthesis": "Synthesis & Briefing",
-    # Housing
-    "phase_1_pathways": "Identifying transmission pathways",
-    "phase_2_baseline": "Gathering housing market baseline",
-    "phase_3_magnitudes": "Estimating impact magnitudes",
-    "phase_4_distributional": "Distributional & temporal analysis",
-    "phase_5_scorecard": "Building affordability scorecard",
-    "phase_5_minimal": "Minimal impact assessment",
-    # Consumer
-    "phase_1_shock": "Identifying price shock entry points",
-    "phase_2_passthrough": "Estimating pass-through rates",
-    "phase_3_geo_behavioral": "Geographic & behavioral analysis",
-    "phase_4_purchasing_power": "Net purchasing power calculation",
-    # Synthesis
-    "phase_1_audit": "Consistency Audit",
-    "phase_2_impact": "Net Household Impact",
-    "phase_3_winners": "Winners & Losers",
-    "phase_4_narrative": "Narrative & Timeline",
-    "phase_5_payload": "Analytics Payload",
+# Sub-graph phase nodes → agent + phase number
+# Nodes with unique names get a direct lookup.
+# Nodes with shared names (phase_2_baseline, phase_5_scorecard, phase_5_minimal)
+# are resolved at runtime using the active agent context.
+_PHASE_NODES: dict[str, tuple[str, str, str]] = {}  # name → (agent, phase_num, label)
+
+# Analyst phases (all unique names)
+_ANALYST_PHASE_NODES = {
+    "phase_1_policy_spec": ("analyst", "1", "Policy Specification"),
+    "phase_2_baseline": ("analyst", "2", "Baseline & Counterfactual"),
+    "phase_3_transmission": ("analyst", "3", "Transmission Mapping"),
+    "phase_4_evidence": ("analyst", "4", "Evidence Gathering"),
+    "phase_5_synthesis": ("analyst", "5", "Synthesis & Briefing"),
 }
 
+# Housing phases
+_HOUSING_PHASE_NODES = {
+    "phase_1_pathways": ("Housing", "1", "Identifying transmission pathways"),
+    "housing_phase_1_pathways": ("Housing", "1", "Identifying transmission pathways"),
+    "phase_2_baseline": ("Housing", "2", "Gathering housing market baseline"),
+    "phase_3_magnitudes": ("Housing", "3", "Estimating impact magnitudes"),
+    "phase_4_distributional": ("Housing", "4", "Distributional & temporal analysis"),
+    "phase_5_scorecard": ("Housing", "5", "Building affordability scorecard"),
+    "phase_5_minimal": ("Housing", "5", "Minimal impact assessment"),
+}
 
-def _infer_agent(name: str) -> str | None:
-    """Determine which agent a sub-graph node belongs to."""
-    if name in _ANALYST_PHASES:
-        return "analyst"
-    if name in _HOUSING_PHASES:
-        return "Housing"
-    if name in _CONSUMER_PHASES:
-        return "Consumer"
-    if name in _SYNTHESIS_PHASES:
-        return "synthesis"
-    return None
+# Consumer phases
+_CONSUMER_PHASE_NODES = {
+    "phase_1_shock": ("Consumer", "1", "Identifying price shock entry points"),
+    "consumer_phase_1_shock": ("Consumer", "1", "Identifying price shock entry points"),
+    "phase_2_passthrough": ("Consumer", "2", "Estimating pass-through rates"),
+    "phase_3_geo_behavioral": ("Consumer", "3", "Geographic & behavioral analysis"),
+    "phase_4_purchasing_power": ("Consumer", "4", "Net purchasing power calculation"),
+    "phase_5_scorecard": ("Consumer", "5", "Building consumer impact scorecard"),
+    "phase_5_minimal": ("Consumer", "5", "Minimal impact assessment"),
+}
+
+# Synthesis phases (all unique names)
+_SYNTHESIS_PHASE_NODES = {
+    "phase_1_audit": ("synthesis", "1", "Consistency Audit"),
+    "phase_2_impact": ("synthesis", "2", "Net Household Impact"),
+    "phase_3_winners": ("synthesis", "3", "Winners & Losers"),
+    "phase_4_narrative": ("synthesis", "4", "Narrative & Timeline"),
+    "phase_5_payload": ("synthesis", "5", "Analytics Payload"),
+}
+
+# Unique names go in the global lookup
+for d in [_ANALYST_PHASE_NODES, _HOUSING_PHASE_NODES, _CONSUMER_PHASE_NODES, _SYNTHESIS_PHASE_NODES]:
+    for k, v in d.items():
+        if k not in _PHASE_NODES:
+            _PHASE_NODES[k] = v
+        # For collisions, we rely on active_agent context (see _resolve_phase)
 
 
-def _phase_number(name: str) -> str:
-    """Extract phase number from node name like 'phase_3_magnitudes' → '3'."""
-    parts = name.split("_")
-    if len(parts) >= 2 and parts[1].isdigit():
-        return parts[1]
-    return "0"
+class EventTranslator:
+    """Stateful translator — tracks active agent to attribute tool calls."""
 
+    # Phase node lookups per agent — used for disambiguation
+    _AGENT_PHASES = {
+        "analyst": _ANALYST_PHASE_NODES,
+        "Housing": _HOUSING_PHASE_NODES,
+        "Consumer": _CONSUMER_PHASE_NODES,
+        "synthesis": _SYNTHESIS_PHASE_NODES,
+    }
 
-def translate_event(event: dict[str, Any]) -> dict[str, Any] | None:
-    """Map a LangGraph astream_events event to a frontend PipelineEvent.
+    def __init__(self) -> None:
+        self._active_agent: str | None = None
+        self._active_phase: str = "0"
 
-    Returns None for events that should be filtered out (internal plumbing).
-    """
-    kind = event.get("event", "")
-    name = event.get("name", "")
-    data = event.get("data", {})
-    ts = time.time()
+    def _resolve_phase(self, name: str) -> tuple[str, str, str] | None:
+        """Resolve a phase node name, using active agent to disambiguate collisions."""
+        # Try active agent's lookup first (handles shared names like phase_2_baseline)
+        if self._active_agent and self._active_agent in self._AGENT_PHASES:
+            agent_lookup = self._AGENT_PHASES[self._active_agent]
+            if name in agent_lookup:
+                return agent_lookup[name]
+        # Fall back to global unique lookup
+        return _PHASE_NODES.get(name)
 
-    # ------------------------------------------------------------------
-    # Custom events (from adispatch_custom_event in node functions)
-    # These are already in the frontend's expected format.
-    # ------------------------------------------------------------------
-    if kind == "on_custom_event":
-        event_name = name  # e.g. "classifier_complete", "sector_agent_started"
-        event_data = data if isinstance(data, dict) else {}
+    def translate(self, event: dict[str, Any]) -> dict[str, Any] | None:
+        kind = event.get("event", "")
+        name = event.get("name", "")
+        data = event.get("data", {})
+        ts = time.time()
 
-        # Map custom event names to frontend event types
-        if event_name == "classifier_start":
-            return {"type": "agent_start", "agent": "classifier", "data": event_data, "timestamp": ts}
-        if event_name == "classifier_thinking":
-            return {"type": "classifier_thinking", "agent": "classifier", "data": event_data, "timestamp": ts}
-        if event_name == "classifier_complete":
-            return {"type": "classifier_complete", "agent": "classifier", "data": event_data, "timestamp": ts}
-        if event_name == "agent_start":
-            return {"type": "agent_start", "agent": event_data.get("agent", ""), "data": event_data, "timestamp": ts}
-        if event_name == "analyst_complete":
-            return {"type": "analyst_complete", "agent": "analyst", "data": event_data, "timestamp": ts}
-        if event_name == "analyst_thinking":
-            return {"type": "analyst_thinking", "agent": "analyst", "data": event_data, "timestamp": ts}
-        if event_name == "lightning_payment":
-            return {"type": "lightning_payment", "data": event_data, "timestamp": ts}
-        if event_name == "sector_agent_started":
-            agent = event_data.get("agent", event_data.get("sector", ""))
-            return {"type": "sector_agent_started", "agent": agent, "data": event_data, "timestamp": ts}
-        if event_name == "sector_agent_complete":
-            agent = event_data.get("agent", event_data.get("sector", ""))
-            return {"type": "sector_agent_complete", "agent": agent, "data": event_data, "timestamp": ts}
-        if event_name == "synthesis_complete":
-            return {"type": "synthesis_complete", "agent": "synthesis", "data": event_data, "timestamp": ts}
+        # ==============================================================
+        # Custom events (from adispatch_custom_event in node functions)
+        # ==============================================================
+        if kind == "on_custom_event":
+            return self._handle_custom(name, data, ts)
 
-        # Pass through any other custom events as-is
-        return {"type": event_name, "data": event_data, "timestamp": ts}
+        # ==============================================================
+        # Top-level node lifecycle
+        # ==============================================================
+        if kind == "on_chain_start" and name in _TOP_NODES:
+            agent = _TOP_NODES[name]
+            if agent:
+                self._active_agent = agent
+            return None  # Custom events handle agent_start
 
-    # ------------------------------------------------------------------
-    # Sub-graph phase transitions (on_chain_start / on_chain_end)
-    # ------------------------------------------------------------------
-    if kind == "on_chain_start":
-        agent = _infer_agent(name)
-        if agent:
-            phase = _phase_number(name)
-            label = _PHASE_LABELS.get(name, name)
+        if kind == "on_chain_end" and name in _TOP_NODES:
+            return None  # Custom events handle agent_complete
 
+        # ==============================================================
+        # Sub-graph phase transitions
+        # ==============================================================
+        if kind == "on_chain_start":
+            resolved = self._resolve_phase(name)
+            if resolved:
+                agent, num, label = resolved
+                self._active_agent = agent
+                self._active_phase = num
+                return self._phase_event(agent, num, label, "start", ts)
+
+        if kind == "on_chain_end":
+            resolved = self._resolve_phase(name)
+            if resolved:
+                agent, num, label = resolved
+                return self._phase_event(agent, num, label, "complete", ts)
+
+        # ==============================================================
+        # Tool calls — attributed to the currently active agent
+        # ==============================================================
+        if kind == "on_tool_start":
+            return self._tool_event(name, data, ts)
+
+        if kind == "on_tool_end":
+            # Emit tool results for richer frontend display
+            tool_output = data.get("output", "")
+            output_str = str(tool_output)[:120] if tool_output else ""
+            agent = self._active_agent or "analyst"
             if agent == "analyst":
                 return {"type": "analyst_thinking", "agent": "analyst", "data": {
-                    "step_type": "phase_start", "content": f"Phase {phase}: {label}", "phase": phase,
+                    "step_type": "tool_result", "content": f"{name} → {output_str}",
+                    "phase": self._active_phase, "tool": name,
                 }, "timestamp": ts}
-
-            if agent in ("Housing", "Consumer"):
-                return {"type": "sector_agent_tool_call", "agent": agent, "data": {
-                    "agent": agent, "tool": f"phase_{phase}", "query": label,
-                    "phase": phase, "phase_detail": label,
-                }, "timestamp": ts}
-
-            if agent == "synthesis":
-                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
-                    "step_type": "phase_start", "content": f"Phase {phase}: {label}", "phase": phase,
-                }, "timestamp": ts}
-
-        return None
-
-    if kind == "on_chain_end":
-        agent = _infer_agent(name)
-        if agent:
-            phase = _phase_number(name)
-            label = _PHASE_LABELS.get(name, name)
-
-            if agent == "analyst":
-                return {"type": "analyst_thinking", "agent": "analyst", "data": {
-                    "step_type": "phase_complete", "content": f"Phase {phase} ({label}) complete", "phase": phase,
-                }, "timestamp": ts}
-
             if agent in ("Housing", "Consumer"):
                 return {"type": "sector_agent_thinking", "agent": agent, "data": {
-                    "agent": agent, "step_type": "phase_complete",
-                    "content": f"Phase {phase} complete: {label}", "phase": phase,
+                    "agent": agent, "step_type": "tool_result",
+                    "content": f"{name} → {output_str}",
+                    "phase": self._active_phase, "tool": name,
                 }, "timestamp": ts}
+            return None
 
+        # ==============================================================
+        # LLM activity
+        # ==============================================================
+        if kind == "on_chat_model_start":
+            agent = self._active_agent
+            if agent == "analyst":
+                return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                    "step_type": "reasoning", "content": "Analyzing data...",
+                    "phase": self._active_phase,
+                }, "timestamp": ts}
+            if agent in ("Housing", "Consumer"):
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "reasoning",
+                    "content": "Analyzing data and forming conclusions...",
+                    "phase": self._active_phase,
+                }, "timestamp": ts}
             if agent == "synthesis":
-                phase_data = {"phase": int(phase), "name": label, "status": "complete"}
-                return {"type": "synthesis_phase", "agent": "synthesis", "data": phase_data, "timestamp": ts}
+                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
+                    "step_type": "reasoning", "content": "Analyzing...",
+                    "phase": self._active_phase,
+                }, "timestamp": ts}
+            return None
 
         return None
 
-    # ------------------------------------------------------------------
-    # Tool calls
-    # ------------------------------------------------------------------
-    if kind == "on_tool_start":
+    def _handle_custom(self, name: str, data: Any, ts: float) -> dict | None:
+        if not isinstance(data, dict):
+            data = {}
+
+        mapping = {
+            "classifier_start": ("agent_start", "classifier"),
+            "classifier_thinking": ("classifier_thinking", "classifier"),
+            "classifier_complete": ("classifier_complete", "classifier"),
+            "agent_start": ("agent_start", data.get("agent", "")),
+            "analyst_complete": ("analyst_complete", "analyst"),
+            "analyst_thinking": ("analyst_thinking", "analyst"),
+            "lightning_payment": ("lightning_payment", "lightning"),
+            "sector_agent_started": ("sector_agent_started", data.get("agent", data.get("sector", ""))),
+            "sector_agent_complete": ("sector_agent_complete", data.get("agent", data.get("sector", ""))),
+            "synthesis_complete": ("synthesis_complete", "synthesis"),
+        }
+
+        if name in mapping:
+            event_type, agent = mapping[name]
+            return {"type": event_type, "agent": agent, "data": data, "timestamp": ts}
+
+        # Tool activity from tool wrappers (via _record_timing_async)
+        if name == "tool_activity":
+            tool = data.get("tool", "")
+            args = data.get("args", "")
+            duration = data.get("duration_ms", 0)
+            success = data.get("success", True)
+            status = "OK" if success else "FAIL"
+            agent = self._active_agent or "analyst"
+
+            if agent == "analyst":
+                return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                    "step_type": "tool_call" if success else "tool_result",
+                    "content": f"{tool}({args}) → {duration}ms {status}",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent in ("Housing", "Consumer"):
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "tool_call",
+                    "content": f"{tool}({args}) → {duration}ms {status}",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent == "synthesis":
+                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
+                    "step_type": "tool_call",
+                    "content": f"{tool}({args}) → {duration}ms {status}",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            return None
+
+        # Tool call/result forwarded from _run_subgraph
+        if name.endswith("_tool_call"):
+            agent = data.get("agent", name.replace("_tool_call", ""))
+            tool = data.get("tool", "")
+            args = data.get("args", "")
+            if agent == "analyst":
+                return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                    "step_type": "tool_call", "content": f"{tool}({args})",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent in ("Housing", "Consumer"):
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "tool_call",
+                    "content": f"Calling {tool}({args})",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent == "synthesis":
+                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
+                    "step_type": "tool_call", "content": f"Calling {tool}({args})",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+
+        if name.endswith("_tool_result"):
+            agent = data.get("agent", name.replace("_tool_result", ""))
+            tool = data.get("tool", "")
+            result_str = data.get("result", "")
+            if agent == "analyst":
+                return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                    "step_type": "tool_result", "content": f"{tool} → {result_str}",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent in ("Housing", "Consumer"):
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "tool_result",
+                    "content": f"{tool} → {result_str}",
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            return None
+
+        # Pass through unknown custom events
+        return {"type": name, "data": data, "timestamp": ts}
+
+    def _phase_event(self, agent: str, num: str, label: str, status: str, ts: float) -> dict:
+        if agent == "analyst":
+            step = "phase_start" if status == "start" else "phase_complete"
+            content = f"Phase {num}: {label}" if status == "start" else f"Phase {num} ({label}) complete"
+            return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                "step_type": step, "content": content, "phase": num,
+            }, "timestamp": ts}
+
+        if agent in ("Housing", "Consumer"):
+            if status == "start":
+                return {"type": "sector_agent_tool_call", "agent": agent, "data": {
+                    "agent": agent, "tool": f"phase_{num}", "query": label,
+                    "phase": num, "phase_detail": label,
+                }, "timestamp": ts}
+            else:
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "phase_complete",
+                    "content": f"Phase {num} complete: {label}", "phase": num,
+                }, "timestamp": ts}
+
+        if agent == "synthesis":
+            if status == "start":
+                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
+                    "step_type": "phase_start", "content": f"Phase {num}: {label}", "phase": num,
+                }, "timestamp": ts}
+            else:
+                return {"type": "synthesis_phase", "agent": "synthesis", "data": {
+                    "phase": int(num), "name": label, "status": "complete",
+                }, "timestamp": ts}
+
+        return {"type": "agent_thinking", "data": {"agent": agent, "phase": num, "label": label}, "timestamp": ts}
+
+    def _tool_event(self, tool_name: str, data: dict, ts: float) -> dict | None:
         tool_input = data.get("input", {})
         if isinstance(tool_input, dict):
             args_str = ", ".join(f"{k}={v}" for k, v in list(tool_input.items())[:3])
         else:
             args_str = str(tool_input)[:100]
 
-        # Try to infer agent from parent tags
-        tags = event.get("tags", [])
-        agent = _agent_from_tags(tags)
+        agent = self._active_agent or "analyst"
 
         if agent == "analyst":
-            return {"type": "analyst_tool_call", "agent": "analyst", "data": {
-                "tool": name, "query": args_str,
+            return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                "step_type": "tool_call", "content": f"{tool_name}({args_str[:80]})",
+                "phase": self._active_phase, "tool": tool_name,
             }, "timestamp": ts}
 
         if agent in ("Housing", "Consumer"):
             return {"type": "sector_agent_thinking", "agent": agent, "data": {
                 "agent": agent, "step_type": "tool_call",
-                "content": f"Calling {name}({args_str})", "tool": name,
+                "content": f"Calling {tool_name}({args_str[:80]})",
+                "phase": self._active_phase, "tool": tool_name,
             }, "timestamp": ts}
 
         if agent == "synthesis":
             return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
-                "step_type": "tool_call", "content": f"Calling {name}({args_str})", "tool": name,
+                "step_type": "tool_call", "content": f"Calling {tool_name}({args_str[:80]})",
+                "phase": self._active_phase, "tool": tool_name,
             }, "timestamp": ts}
 
-        # Generic tool call
         return {"type": "analyst_tool_call", "agent": "analyst", "data": {
-            "tool": name, "query": args_str,
+            "tool": tool_name, "query": args_str,
         }, "timestamp": ts}
-
-    if kind == "on_tool_end":
-        return None  # Tool results are noisy — skip
-
-    # ------------------------------------------------------------------
-    # LLM activity
-    # ------------------------------------------------------------------
-    if kind == "on_chat_model_start":
-        tags = event.get("tags", [])
-        agent = _agent_from_tags(tags)
-        if agent in ("Housing", "Consumer"):
-            return {"type": "sector_agent_thinking", "agent": agent, "data": {
-                "agent": agent, "step_type": "reasoning",
-                "content": "Analyzing data and forming conclusions...",
-            }, "timestamp": ts}
-        if agent == "synthesis":
-            return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
-                "step_type": "reasoning", "content": "Analyzing...",
-            }, "timestamp": ts}
-        return None
-
-    # Skip noisy events
-    return None
-
-
-def _agent_from_tags(tags: list[str]) -> str | None:
-    """Infer agent from LangGraph event tags.
-
-    LangGraph tags events with the graph hierarchy. We look for
-    known node names in the tags to determine which agent emitted it.
-    """
-    tag_str = " ".join(tags).lower() if tags else ""
-    if "housing" in tag_str:
-        return "Housing"
-    if "consumer" in tag_str:
-        return "Consumer"
-    if "synthesis" in tag_str:
-        return "synthesis"
-    if "analyst" in tag_str:
-        return "analyst"
-    return None

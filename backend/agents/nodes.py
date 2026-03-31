@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import logging
 
+from langchain_core.runnables import RunnableConfig
+
 from backend.agents._helpers import _run_react_phase, _run_reasoning_phase
 from backend.agents.prompts import (
     phase_1_system_prompt,
@@ -35,7 +37,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-async def phase_1_policy_spec(state: dict) -> dict:
+async def phase_1_policy_spec(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 1: Policy Specification — ReAct with web search, doc fetch, FRED."""
     logger.info("=== PHASE 1: Policy Specification ===")
     policy_query = state["policy_query"]
@@ -47,6 +49,7 @@ async def phase_1_policy_spec(state: dict) -> dict:
         tools=PHASE_1_TOOLS,
         phase_num=1,
         state=state,
+        parent_config=config,
     )
 
     policy_spec = PolicySpec(**parsed)
@@ -59,7 +62,7 @@ async def phase_1_policy_spec(state: dict) -> dict:
     }
 
 
-async def phase_2_baseline(state: dict) -> dict:
+async def phase_2_baseline(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 2: Baseline & Counterfactual — ReAct with FRED + BLS."""
     logger.info("=== PHASE 2: Baseline & Counterfactual ===")
     prompt = phase_2_system_prompt(state["policy_query"], state["phase_1_output"])
@@ -70,6 +73,7 @@ async def phase_2_baseline(state: dict) -> dict:
         tools=PHASE_2_TOOLS,
         phase_num=2,
         state=state,
+        parent_config=config,
     )
 
     baseline = BaselineOutput(**parsed)
@@ -103,7 +107,7 @@ async def phase_3_transmission(state: dict) -> dict:
     }
 
 
-async def phase_4_evidence(state: dict) -> dict:
+async def phase_4_evidence(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 4: Evidence Gathering — ReAct with academic search + CBO + news."""
     logger.info("=== PHASE 4: Evidence Gathering ===")
     prompt = phase_4_system_prompt(
@@ -119,7 +123,8 @@ async def phase_4_evidence(state: dict) -> dict:
         tools=PHASE_4_TOOLS,
         phase_num=4,
         state=state,
-        recursion_limit=40,  # Phase 4 makes the most tool calls
+        recursion_limit=40,
+        parent_config=config,
     )
 
     evidence = EvidenceOutput(**parsed)

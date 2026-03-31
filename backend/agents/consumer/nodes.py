@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from langchain_core.runnables import RunnableConfig
+
 from backend.agents._helpers import (
     _run_react_phase,
     _run_reasoning_phase,
@@ -57,7 +59,7 @@ async def consumer_phase_1_shock(state: dict) -> dict:
     }
 
 
-async def consumer_phase_2_passthrough(state: dict) -> dict:
+async def consumer_phase_2_passthrough(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 2: Pass-Through + Baseline — ReAct with BLS, FRED, Census, BEA, etc."""
     logger.info("=== CONSUMER PHASE 2: Pass-Through + Baseline ===")
     prompt = phase_2_system_prompt(state["analyst_briefing"], state["phase_1_output"])
@@ -69,6 +71,7 @@ async def consumer_phase_2_passthrough(state: dict) -> dict:
         phase_num=2,
         state=state,
         recursion_limit=30,
+        parent_config=config,
     )
 
     output = PassThroughBaselineOutput(**parsed)
@@ -89,7 +92,7 @@ async def consumer_phase_2_passthrough(state: dict) -> dict:
     }
 
 
-async def consumer_phase_3_geo_behavioral(state: dict) -> dict:
+async def consumer_phase_3_geo_behavioral(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 3: Geographic + Behavioral — ReAct with code_execute + BEA + Census."""
     logger.info("=== CONSUMER PHASE 3: Geographic + Behavioral ===")
 
@@ -106,6 +109,7 @@ async def consumer_phase_3_geo_behavioral(state: dict) -> dict:
         phase_num=3,
         state=state,
         recursion_limit=20,
+        parent_config=config,
     )
 
     output = GeoBehavioralOutput(**parsed)
@@ -123,7 +127,7 @@ async def consumer_phase_3_geo_behavioral(state: dict) -> dict:
     }
 
 
-async def consumer_phase_4_purchasing_power(state: dict) -> dict:
+async def consumer_phase_4_purchasing_power(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 4: Net Purchasing Power — ReAct with code_execute."""
     logger.info("=== CONSUMER PHASE 4: Net Purchasing Power ===")
 
@@ -141,6 +145,7 @@ async def consumer_phase_4_purchasing_power(state: dict) -> dict:
         phase_num=4,
         state=state,
         recursion_limit=20,
+        parent_config=config,
     )
 
     output = PurchasingPowerOutput(**parsed)
@@ -161,7 +166,7 @@ async def consumer_phase_4_purchasing_power(state: dict) -> dict:
     }
 
 
-async def consumer_phase_5_scorecard(state: dict) -> dict:
+async def consumer_phase_5_scorecard(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 5: Consumer Impact Scorecard + Final Report — ReAct with code_execute."""
     logger.info("=== CONSUMER PHASE 5: Consumer Impact Scorecard ===")
 
@@ -179,6 +184,7 @@ async def consumer_phase_5_scorecard(state: dict) -> dict:
         phase_num=5,
         state=state,
         recursion_limit=20,
+        parent_config=config,
     )
 
     parsed.setdefault("sector", "consumer")

@@ -29,6 +29,46 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Helper: run a sub-graph and forward its events as custom events
+# ---------------------------------------------------------------------------
+
+async def _run_subgraph(
+    graph,
+    initial: dict,
+    agent_name: str,
+    config: RunnableConfig,
+) -> dict:
+    """Run a compiled sub-graph via astream_events, forwarding tool/phase events
+    as custom events so they bubble up to the top-level SSE stream.
+
+    Returns the final accumulated state from all node outputs.
+    """
+    final_state: dict = {}
+
+    async for event in graph.astream_events(initial, version="v2", config=config):
+        kind = event.get("event", "")
+        name = event.get("name", "")
+        data = event.get("data", {})
+
+        # Accumulate state from node completions
+        if kind == "on_chain_end":
+            output = data.get("output")
+            if isinstance(output, dict) and name not in ("LangGraph",):
+                final_state.update(output)
+
+        # Forward custom events from inner graph to parent pipeline.
+        # These come from _run_react_phase dispatching "tool_activity"
+        # events as it streams the ReAct agent.
+        elif kind == "on_custom_event":
+            try:
+                await adispatch_custom_event(name, data, config=config)
+            except Exception:
+                pass
+
+    return final_state
+
+
+# ---------------------------------------------------------------------------
 # Pipeline state — flows through all nodes
 # ---------------------------------------------------------------------------
 
@@ -168,8 +208,8 @@ async def analyst_node(state: PipelineGraphState, config: RunnableConfig) -> dic
         "tool_call_log": [],
     }
 
-    # Run sub-graph — its internal events bubble up through astream_events
-    final_state = await graph.ainvoke(initial, config=config)
+    # Run sub-graph — tool/phase events forwarded via _run_subgraph
+    final_state = await _run_subgraph(graph, initial, "analyst", config)
 
     briefing = final_state.get("phase_5_output")
     duration = time.time() - t0
@@ -305,7 +345,7 @@ async def housing_node(state: PipelineGraphState, config: RunnableConfig) -> dic
             "tool_call_log": [],
         }
 
-        final = await graph.ainvoke(initial, config=config)
+        final = await _run_subgraph(graph, initial, "Housing", config)
 
         housing_report = final.get("phase_5_output")
         if housing_report is None:
@@ -370,7 +410,7 @@ async def consumer_node(state: PipelineGraphState, config: RunnableConfig) -> di
             "tool_call_log": [],
         }
 
-        final = await graph.ainvoke(initial, config=config)
+        final = await _run_subgraph(graph, initial, "Consumer", config)
 
         consumer_report = final.get("phase_5_output")
         if consumer_report is None:
@@ -457,7 +497,7 @@ async def synthesis_node(state: PipelineGraphState, config: RunnableConfig) -> d
         "tool_call_log": [],
     }
 
-    final = await graph.ainvoke(initial, config=config)
+    final = await _run_subgraph(graph, initial, "synthesis", config)
     duration = time.time() - t0
 
     synthesis_output = final.get("phase_5_output")

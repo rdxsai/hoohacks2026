@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from langchain_core.runnables import RunnableConfig
+
 from backend.agents._helpers import (
     _run_react_phase,
     _run_reasoning_phase,
@@ -54,7 +56,7 @@ async def housing_phase_1_pathways(state: dict) -> dict:
     }
 
 
-async def housing_phase_2_baseline(state: dict) -> dict:
+async def housing_phase_2_baseline(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 2: Housing Market Baseline — ReAct with FRED, BLS, Census, BEA, HUD."""
     logger.info("=== HOUSING PHASE 2: Housing Market Baseline ===")
     prompt = phase_2_system_prompt(state["analyst_briefing"], state["phase_1_output"])
@@ -66,6 +68,7 @@ async def housing_phase_2_baseline(state: dict) -> dict:
         phase_num=2,
         state=state,
         recursion_limit=30,
+        parent_config=config,
     )
 
     output = HousingBaselineOutput(**parsed)
@@ -87,7 +90,7 @@ async def housing_phase_2_baseline(state: dict) -> dict:
     }
 
 
-async def housing_phase_3_magnitudes(state: dict) -> dict:
+async def housing_phase_3_magnitudes(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 3: Magnitude Estimation — ReAct with code_execute + data tools.
 
     Uses short system prompt + detailed user message (Gemini needs this pattern
@@ -139,6 +142,7 @@ Produce JSON matching this schema:
         phase_num=3,
         state=state,
         recursion_limit=20,
+        parent_config=config,
     )
 
     output = MagnitudeEstimationOutput(**parsed)
@@ -156,7 +160,7 @@ Produce JSON matching this schema:
     }
 
 
-async def housing_phase_4_distributional(state: dict) -> dict:
+async def housing_phase_4_distributional(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 4: Distributional + Temporal Analysis — ReAct with code_execute."""
     logger.info("=== HOUSING PHASE 4: Distributional & Temporal ===")
 
@@ -212,6 +216,7 @@ Produce JSON matching this schema:
         phase_num=4,
         state=state,
         recursion_limit=20,
+        parent_config=config,
     )
 
     output = DistributionalTemporalOutput(**parsed)
@@ -232,7 +237,7 @@ Produce JSON matching this schema:
     }
 
 
-async def housing_phase_5_scorecard(state: dict) -> dict:
+async def housing_phase_5_scorecard(state: dict, config: RunnableConfig = None) -> dict:
     """Phase 5: Affordability Scorecard + Final Report — ReAct with code_execute."""
     logger.info("=== HOUSING PHASE 5: Affordability Scorecard ===")
 
@@ -281,6 +286,7 @@ Produce JSON matching this schema:
         phase_num=5,
         state=state,
         recursion_limit=20,
+        parent_config=config,
     )
 
     parsed.setdefault("sector", "housing")

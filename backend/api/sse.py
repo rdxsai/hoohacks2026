@@ -16,7 +16,7 @@ from typing import Any, AsyncGenerator
 from fastapi import APIRouter, Query
 from starlette.responses import StreamingResponse
 
-from backend.api.event_translator import translate_event
+from backend.api.event_translator import EventTranslator
 
 router = APIRouter()
 
@@ -39,9 +39,11 @@ async def _event_stream(
         "stage_times": {},
     }
 
+    translator = EventTranslator()
+
     try:
         async for event in graph.astream_events(initial, version="v2"):
-            translated = translate_event(event)
+            translated = translator.translate(event)
             if translated is not None:
                 data = json.dumps(translated, default=str)
                 yield f"data: {data}\n\n"

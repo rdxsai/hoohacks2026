@@ -97,8 +97,19 @@ async def _run_react_phase(
     phase_num: int,
     state: dict,
     recursion_limit: int = 40,
+    parent_config: dict | None = None,
 ) -> tuple[dict, list[ToolCallRecord]]:
-    """Run a ReAct agent for a tool-using phase. Returns (parsed_json, tool_records)."""
+    """Run a ReAct agent for a tool-using phase. Returns (parsed_json, tool_records).
+
+    Streams the agent via astream_events so tool calls are visible to the
+    parent graph's event stream. Dispatches 'tool_activity' custom events
+    for each tool call, which propagate up through _run_subgraph to SSE.
+
+    parent_config: RunnableConfig from the calling LangGraph node. Required
+    for custom events to propagate to the parent graph's event stream.
+    """
+    from langchain_core.callbacks.manager import adispatch_custom_event
+
     llm = get_chat_model()
 
     logger.info(f"Phase {phase_num} prompt size: {len(system_prompt)} chars (~{len(system_prompt)//4} tokens), tools: {[t.name for t in tools]}")
@@ -109,20 +120,73 @@ async def _run_react_phase(
         prompt=system_prompt,
     )
 
-    result = await agent.ainvoke(
-        {"messages": [HumanMessage(content=user_message)]},
+    input_msg = {"messages": [HumanMessage(content=user_message)]}
+    tool_records: list[ToolCallRecord] = []
+    final_messages: list = []
+
+    async for event in agent.astream_events(
+        input_msg,
+        version="v2",
         config={"recursion_limit": recursion_limit},
-    )
+    ):
+        kind = event.get("event", "")
+        name = event.get("name", "")
+        data = event.get("data", {})
 
-    # Log message count for debugging
-    logger.info(f"Phase {phase_num} message count: {len(result['messages'])}")
+        # Tool call starting — dispatch custom event upward
+        if kind == "on_tool_start":
+            tool_input = data.get("input", {})
+            args_str = str(tool_input)[:100] if tool_input else ""
+            logger.info(f"Phase {phase_num} tool call: {name}({args_str[:60]})")
+            if parent_config:
+                try:
+                    await adispatch_custom_event("tool_activity", {
+                        "tool": name,
+                        "args": args_str,
+                        "phase": str(phase_num),
+                        "status": "calling",
+                    }, config=parent_config)
+                except Exception:
+                    pass
 
-    final_msg = result["messages"][-1]
+        # Tool call completed — record it and dispatch result
+        elif kind == "on_tool_end":
+            output = str(data.get("output", ""))[:200]
+            tool_records.append(
+                ToolCallRecord(
+                    phase=phase_num,
+                    tool_name=name,
+                    arguments=data.get("input", {}),
+                    result_summary=output,
+                    timestamp=datetime.now(timezone.utc).isoformat(),
+                )
+            )
+            if parent_config:
+                try:
+                    await adispatch_custom_event("tool_activity", {
+                        "tool": name,
+                        "result": output[:100],
+                        "phase": str(phase_num),
+                        "status": "complete",
+                    }, config=parent_config)
+                except Exception:
+                    pass
+
+        # Capture final messages from the outermost chain completion
+        elif kind == "on_chain_end" and name == "LangGraph":
+            output = data.get("output", {})
+            if isinstance(output, dict) and "messages" in output:
+                final_messages = output["messages"]
+
+    logger.info(f"Phase {phase_num} message count: {len(final_messages)}, tool calls: {len(tool_records)}")
+
+    if not final_messages:
+        raise ValueError(f"Phase {phase_num}: ReAct agent produced no messages")
+
+    final_msg = final_messages[-1]
     final_content = final_msg.content
     logger.info(f"Phase {phase_num} final message type: {type(final_content).__name__}")
     logger.info(f"Phase {phase_num} final content preview: {str(final_content)[:500]}")
-
-    tool_records = _extract_tool_records(result["messages"], phase_num)
 
     try:
         parsed = _extract_json_block(final_content)
@@ -135,7 +199,7 @@ async def _run_react_phase(
         f"Phase {phase_num}: No JSON in final message. Re-prompting for structured output."
     )
     followup = await llm.ainvoke(
-        result["messages"]
+        final_messages
         + [
             HumanMessage(
                 content="You ran out of steps. Based on all the data you've gathered above, "
