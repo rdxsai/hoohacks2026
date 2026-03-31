@@ -154,27 +154,10 @@ class EventTranslator:
                 return self._phase_event(agent, num, label, "complete", ts)
 
         # ==============================================================
-        # Tool calls — attributed to the currently active agent
+        # Tool calls — handled by tool_complete custom events from
+        # _run_react_phase. Skip raw on_tool_start/end to avoid dupes.
         # ==============================================================
-        if kind == "on_tool_start":
-            return self._tool_event(name, data, ts)
-
-        if kind == "on_tool_end":
-            # Emit tool results for richer frontend display
-            tool_output = data.get("output", "")
-            output_str = str(tool_output)[:120] if tool_output else ""
-            agent = self._active_agent or "analyst"
-            if agent == "analyst":
-                return {"type": "analyst_thinking", "agent": "analyst", "data": {
-                    "step_type": "tool_result", "content": f"{name} → {output_str}",
-                    "phase": self._active_phase, "tool": name,
-                }, "timestamp": ts}
-            if agent in ("Housing", "Consumer"):
-                return {"type": "sector_agent_thinking", "agent": agent, "data": {
-                    "agent": agent, "step_type": "tool_result",
-                    "content": f"{name} → {output_str}",
-                    "phase": self._active_phase, "tool": name,
-                }, "timestamp": ts}
+        if kind in ("on_tool_start", "on_tool_end"):
             return None
 
         # ==============================================================
@@ -246,7 +229,39 @@ class EventTranslator:
                 }, "timestamp": ts}
             return None
 
-        # Tool activity from tool wrappers
+        # Tool completion event (from _run_react_phase)
+        if name == "tool_complete":
+            tool = data.get("tool", "")
+            args = data.get("args", "")
+            result = data.get("result", "")
+            duration = data.get("duration_ms", 0)
+            agent = self._active_agent or "analyst"
+
+            display = f"{tool}({args})"
+            if result:
+                display += f" → {result}"
+            if duration:
+                display += f" [{duration}ms]"
+
+            if agent == "analyst":
+                return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                    "step_type": "tool_call", "content": display,
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent in ("Housing", "Consumer"):
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "tool_call",
+                    "content": display,
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            if agent == "synthesis":
+                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
+                    "step_type": "tool_call", "content": display,
+                    "phase": self._active_phase, "tool": tool,
+                }, "timestamp": ts}
+            return None
+
+        # Tool activity (legacy — from tool wrappers)
         if name == "tool_activity":
             tool = data.get("tool", "")
             args = data.get("args", "")

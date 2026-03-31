@@ -90,6 +90,95 @@ def _extract_tool_records(messages: list, phase: int) -> list[ToolCallRecord]:
     return records
 
 
+def _is_json_text(text: str) -> bool:
+    """Check if text looks like JSON fragment rather than natural language."""
+    t = text.strip()
+    if not t:
+        return True
+    # Obvious JSON tokens
+    if t.startswith(("```", '{"', '"', "}", "{", "[", "]", "true", "false", "null")):
+        return True
+    # JSON key-value patterns
+    if '": ' in t or '":' in t:
+        return True
+    # JSON line endings
+    if t.endswith((",", "{", "[", '",', '"}', '"]', '"')):
+        return True
+    # Partial JSON values — lines that look like they continue a JSON field
+    if t.startswith(("- **", "###")) and len(t) < 80:
+        return True  # Markdown headers from JSON-derived content in final output
+    return False
+
+
+def _summarize_tool_result(tool_name: str, raw_output: str) -> str:
+    """Extract a human-readable summary from raw tool output."""
+    import json as _json
+    try:
+        data = _json.loads(raw_output)
+    except (ValueError, TypeError):
+        return raw_output[:80]
+
+    if tool_name == "fred_get_series":
+        title = data.get("title", "")
+        val = data.get("latest_value", "")
+        date = data.get("latest_date", "")
+        return f"{title}: {val} ({date})" if title else raw_output[:80]
+
+    if tool_name == "fred_get_many":
+        results = data.get("results", [])
+        parts = []
+        for r in results[:3]:
+            parts.append(f"{r.get('title', r.get('series_id', '?'))}: {r.get('latest_value', '?')}")
+        if len(results) > 3:
+            parts.append(f"+{len(results) - 3} more")
+        return "; ".join(parts) if parts else f"{len(results)} series"
+
+    if tool_name == "fred_search":
+        results = data.get("results", [])
+        return f"Found {len(results)} series" + (f" — {results[0].get('title', '')[:50]}" if results else "")
+
+    if tool_name == "bls_get_data":
+        results = data.get("results", [])
+        return f"{len(results)} BLS series retrieved"
+
+    if tool_name in ("search_academic_papers", "search_openalex"):
+        results = data.get("results", [])
+        if results:
+            return f"{len(results)} papers — {results[0].get('title', '')[:60]}"
+        return "No papers found"
+
+    if tool_name == "search_cbo_reports":
+        results = data.get("results", [])
+        if results:
+            return f"{len(results)} CBO reports — {results[0].get('title', '')[:60]}"
+        return "No CBO reports found"
+
+    if tool_name == "web_search_news":
+        results = data.get("results", [])
+        if results:
+            return f"{len(results)} articles — {results[0].get('title', '')[:60]}"
+        return "No articles found"
+
+    if tool_name == "fetch_document_text":
+        chars = data.get("char_count", 0)
+        return f"Fetched {chars} chars from {data.get('url', '?')[:50]}"
+
+    if tool_name == "code_execute":
+        result_val = data.get("result", "")
+        if result_val:
+            return f"Computed: {str(result_val)[:80]}"
+        return data.get("error", "executed")[:80]
+
+    if tool_name == "census_acs_query":
+        rows = data.get("rows", [])
+        return f"{len(rows)} census records"
+
+    if tool_name == "hud_data":
+        return f"HUD data: {data.get('dataset', '?')}"
+
+    return raw_output[:80]
+
+
 async def _run_react_phase(
     system_prompt: str,
     user_message: str,
@@ -123,7 +212,10 @@ async def _run_react_phase(
     input_msg = {"messages": [HumanMessage(content=user_message)]}
     tool_records: list[ToolCallRecord] = []
     final_messages: list = []
-    _reasoning_buffer: list[str] = []  # accumulate tokens into chunks
+    _reasoning_buffer: list[str] = []
+    _in_json_output = False  # Track when LLM is generating JSON
+    _pending_tool: dict | None = None  # Buffer tool start until we get the end
+    import time as _time
 
     async for event in agent.astream_events(
         input_msg,
@@ -134,75 +226,90 @@ async def _run_react_phase(
         name = event.get("name", "")
         data = event.get("data", {})
 
-        # Tool call starting — dispatch custom event upward
+        # Tool call starting — buffer it, we'll emit on completion
         if kind == "on_tool_start":
             tool_input = data.get("input", {})
-            args_str = str(tool_input)[:100] if tool_input else ""
-            logger.info(f"Phase {phase_num} tool call: {name}({args_str[:60]})")
-            if parent_config:
-                try:
-                    await adispatch_custom_event("tool_activity", {
-                        "tool": name,
-                        "args": args_str,
-                        "phase": str(phase_num),
-                        "status": "calling",
-                    }, config=parent_config)
-                except Exception:
-                    pass
+            # Format args as human-readable
+            if isinstance(tool_input, dict):
+                # Pick the most meaningful arg
+                key_arg = tool_input.get("series_id") or tool_input.get("query") or tool_input.get("series_ids") or tool_input.get("url") or tool_input.get("code", "")[:40]
+                if isinstance(key_arg, list):
+                    key_arg = ", ".join(str(s) for s in key_arg[:4])
+                    if len(tool_input.get("series_ids", [])) > 4:
+                        key_arg += f" +{len(tool_input['series_ids']) - 4} more"
+                args_display = str(key_arg)[:80]
+            else:
+                args_display = str(tool_input)[:80]
+            _pending_tool = {"name": name, "args": args_display, "t0": _time.perf_counter()}
+            # Flush reasoning buffer before tool call
+            if _reasoning_buffer and parent_config:
+                text = "".join(_reasoning_buffer).strip()
+                _reasoning_buffer.clear()
+                if text and not _is_json_text(text):
+                    try:
+                        await adispatch_custom_event("agent_reasoning", {
+                            "content": text[:500], "phase": str(phase_num),
+                        }, config=parent_config)
+                    except Exception:
+                        pass
+            _in_json_output = False  # Reset — new turn after tool result
+            logger.info(f"Phase {phase_num} tool call: {name}({args_display[:60]})")
 
-        # Tool call completed — record it and dispatch result
+        # Tool call completed — emit single clean event with duration + result summary
         elif kind == "on_tool_end":
-            output = str(data.get("output", ""))[:200]
+            output_obj = data.get("output", "")
+            raw_output = getattr(output_obj, "content", None) or str(output_obj)
+            # Extract a meaningful summary from tool output
+            result_summary = _summarize_tool_result(name, raw_output)
+            duration_ms = 0
+            if _pending_tool and _pending_tool["name"] == name:
+                duration_ms = round((_time.perf_counter() - _pending_tool["t0"]) * 1000)
             tool_records.append(
                 ToolCallRecord(
-                    phase=phase_num,
-                    tool_name=name,
+                    phase=phase_num, tool_name=name,
                     arguments=data.get("input", {}),
-                    result_summary=output,
+                    result_summary=raw_output[:200],
                     timestamp=datetime.now(timezone.utc).isoformat(),
+                    duration_ms=duration_ms,
                 )
             )
             if parent_config:
                 try:
-                    await adispatch_custom_event("tool_activity", {
+                    await adispatch_custom_event("tool_complete", {
                         "tool": name,
-                        "result": output[:100],
+                        "args": _pending_tool["args"] if _pending_tool else "",
+                        "result": result_summary,
+                        "duration_ms": duration_ms,
                         "phase": str(phase_num),
-                        "status": "complete",
                     }, config=parent_config)
                 except Exception:
                     pass
+            _pending_tool = None
 
-        # LLM reasoning tokens — buffer into chunks and dispatch.
-        # GPT-4o-mini streams token-by-token; we accumulate and flush
-        # at sentence boundaries or every ~80 chars for smooth UI display.
+        # LLM reasoning tokens — buffer and filter JSON
         elif kind == "on_chat_model_stream":
             chunk = data.get("chunk")
             if chunk and parent_config:
                 content = getattr(chunk, "content", None)
                 if isinstance(content, str) and content:
+                    # Detect JSON output start
+                    if "```json" in content or content.strip().startswith("{"):
+                        _in_json_output = True
+                    if _in_json_output:
+                        # Check if JSON output ended
+                        if "```" in content and not content.strip().startswith("```"):
+                            _in_json_output = False
+                        continue  # Skip all JSON output tokens
+
                     _reasoning_buffer.append(content)
                     buffered = "".join(_reasoning_buffer)
 
                     # Flush at sentence boundary or buffer threshold
-                    should_flush = (
-                        len(buffered) > 80
-                        or buffered.rstrip().endswith((".", "!", "?", ":", ";"))
-                    )
-                    if should_flush:
+                    if len(buffered) > 100 or buffered.rstrip().endswith((".", "!", "?", ":")):
                         text = buffered.strip()
                         _reasoning_buffer.clear()
 
-                        # Only pass through natural language — skip JSON output.
-                        # LLMs in ReAct mode produce JSON directly as their output;
-                        # natural language only appears in the final synthesis turn.
-                        is_json = (
-                            text.startswith(("```", '{"', '"', "}", "{", "[", "]"))
-                            or '": ' in text
-                            or text.endswith((",", "{", "[", '",'))
-                            or text.startswith(("true", "false", "null"))
-                        )
-                        if text and not is_json:
+                        if text and not _is_json_text(text):
                             try:
                                 await adispatch_custom_event("agent_reasoning", {
                                     "content": text[:500],
