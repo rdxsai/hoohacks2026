@@ -90,6 +90,24 @@ def _extract_tool_records(messages: list, phase: int) -> list[ToolCallRecord]:
     return records
 
 
+def _strip_markdown(text: str) -> str:
+    """Strip markdown formatting for clean plaintext display."""
+    import re as _re
+    # Remove ## headers → keep text
+    text = _re.sub(r'^#{1,4}\s+', '', text, flags=_re.MULTILINE)
+    # Remove **bold** → keep text
+    text = _re.sub(r'\*\*(.+?)\*\*', r'\1', text)
+    # Remove *italic* → keep text
+    text = _re.sub(r'\*(.+?)\*', r'\1', text)
+    # Convert "- item" bullets to "• item"
+    text = _re.sub(r'^- ', '• ', text, flags=_re.MULTILINE)
+    # Remove code fences
+    text = _re.sub(r'```\w*\n?', '', text)
+    # Collapse multiple newlines
+    text = _re.sub(r'\n{3,}', '\n\n', text)
+    return text.strip()
+
+
 def _is_json_text(text: str) -> bool:
     """Check if text looks like JSON fragment rather than natural language."""
     t = text.strip()
@@ -222,6 +240,7 @@ async def _run_react_phase(
             text = "".join(_reasoning_buffer).strip()
             _reasoning_buffer.clear()
             if text and not _is_json_text(text) and len(text) > 15:
+                text = _strip_markdown(text)
                 try:
                     await adispatch_custom_event("agent_reasoning", {
                         "content": text[:800],
