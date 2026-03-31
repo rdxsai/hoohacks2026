@@ -227,18 +227,30 @@ async def _run_react_phase(
         data = event.get("data", {})
 
         # ----- LLM turn complete → collect reasoning from content field -----
-        # GPT-4o puts natural language reasoning in content AND tool calls
-        # in tool_calls — they're separate fields. We collect reasoning
-        # and return it so the caller (node function) can dispatch it.
+        # Claude: content is a list of blocks: [{"type":"text","text":"..."}, {"type":"tool_use",...}]
+        # GPT-4o: content is a string (usually empty on tool-calling turns)
+        # We extract text blocks as the agent's reasoning.
         if kind == "on_chat_model_end":
             output = data.get("output")
             if output:
                 content = getattr(output, "content", "")
-                if isinstance(content, str) and content.strip():
-                    text = content.strip()
-                    if not _is_json_text(text) and len(text) > 20:
-                        _reasoning_texts.append(text[:600])
-                        _pending_reasoning = text[:300]
+                reasoning_text = ""
+
+                if isinstance(content, list):
+                    # Claude format: list of typed blocks
+                    text_parts = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_parts.append(block["text"])
+                        elif isinstance(block, str):
+                            text_parts.append(block)
+                    reasoning_text = " ".join(text_parts).strip()
+                elif isinstance(content, str):
+                    reasoning_text = content.strip()
+
+                if reasoning_text and not _is_json_text(reasoning_text) and len(reasoning_text) > 20:
+                    _reasoning_texts.append(reasoning_text[:600])
+                    _pending_reasoning = reasoning_text[:300]
 
         # ----- Tool call starting → buffer for duration tracking -----
         elif kind == "on_tool_start":
