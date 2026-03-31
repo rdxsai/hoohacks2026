@@ -216,6 +216,20 @@ async def _run_react_phase(
     _pending_tool: dict | None = None
     import time as _time
 
+    async def _flush_reasoning():
+        """Flush accumulated reasoning buffer as a single event."""
+        if _reasoning_buffer and parent_config:
+            text = "".join(_reasoning_buffer).strip()
+            _reasoning_buffer.clear()
+            if text and not _is_json_text(text) and len(text) > 15:
+                try:
+                    await adispatch_custom_event("agent_reasoning", {
+                        "content": text[:800],
+                        "phase": str(phase_num),
+                    }, config=parent_config)
+                except Exception:
+                    pass
+
     async for event in agent.astream_events(
         input_msg,
         version="v2",
@@ -246,39 +260,16 @@ async def _run_react_phase(
 
                 if text_delta:
                     _reasoning_buffer.append(text_delta)
-                    buffered = "".join(_reasoning_buffer)
+                    # Don't flush here — accumulate until a tool call or turn end
+                    # so all reasoning appears as one continuous block in the UI.
 
-                    # Flush at sentence boundary or every ~100 chars
-                    if len(buffered) > 100 or buffered.rstrip().endswith((".", "!", "?", ":")):
-                        text = buffered.strip()
-                        _reasoning_buffer.clear()
-
-                        if text and not _is_json_text(text) and len(text) > 15:
-                            try:
-                                await adispatch_custom_event("agent_reasoning", {
-                                    "content": text[:500],
-                                    "phase": str(phase_num),
-                                }, config=parent_config)
-                            except Exception:
-                                pass
-
-        # ----- LLM turn complete → flush buffer, no duplicate dispatch -----
+        # ----- LLM turn complete → flush remaining buffer -----
         elif kind == "on_chat_model_end":
-            # Flush remaining stream buffer
-            if _reasoning_buffer and parent_config:
-                text = "".join(_reasoning_buffer).strip()
-                _reasoning_buffer.clear()
-                if text and not _is_json_text(text) and len(text) > 15:
-                    try:
-                        await adispatch_custom_event("agent_reasoning", {
-                            "content": text[:500],
-                            "phase": str(phase_num),
-                        }, config=parent_config)
-                    except Exception:
-                        pass
+            await _flush_reasoning()
 
-        # ----- Tool call starting → buffer for duration tracking -----
+        # ----- Tool call starting → flush reasoning, then buffer tool -----
         elif kind == "on_tool_start":
+            await _flush_reasoning()  # Emit reasoning as one block before tool call
             tool_input = data.get("input", {})
             if isinstance(tool_input, dict):
                 key_arg = (tool_input.get("series_id")
