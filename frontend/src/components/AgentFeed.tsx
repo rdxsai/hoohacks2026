@@ -447,25 +447,23 @@ function StreamIcon({ type }: { type: StreamEntry["type"] }) {
 
 /** Human-readable descriptions for known tools */
 const TOOL_INFO: Record<string, { label: string; source: string; color: string }> = {
-  fred_search:            { label: "Search economic data series",       source: "FRED",             color: "sky" },
-  fred_get_series:        { label: "Pull time-series data",            source: "FRED",             color: "sky" },
-  bls_get_data:           { label: "Employment & wage data",           source: "BLS",              color: "sky" },
-  census_query:           { label: "Demographic / housing data",       source: "Census Bureau",    color: "sky" },
-  census_housing_query:   { label: "Housing burden data",              source: "Census Bureau",    color: "sky" },
-  bea_get_data:           { label: "Economic accounts data",           source: "BEA",              color: "sky" },
-  search_academic_papers: { label: "Academic paper search",            source: "Semantic Scholar",  color: "violet" },
-  search_openalex:        { label: "Broad academic search",            source: "OpenAlex",         color: "violet" },
-  search_cbo_reports:     { label: "Congressional budget analysis",    source: "CBO",              color: "violet" },
-  fetch_document_text:    { label: "Fetching full document text",      source: "Web",              color: "blue" },
-  web_search_news:        { label: "News & current context",          source: "Tavily",           color: "blue" },
+  fred_search:            { label: "Searching economic indicators",     source: "FRED",             color: "sky" },
+  fred_get_series:        { label: "Fetching time-series data",        source: "FRED",             color: "sky" },
+  fred_get_many:          { label: "Batch fetching economic data",     source: "FRED",             color: "sky" },
+  bls_get_data:           { label: "Pulling employment & wage data",   source: "BLS",              color: "sky" },
+  census_acs_query:       { label: "Querying demographic data",        source: "Census",           color: "sky" },
+  bea_regional_data:      { label: "Regional economic data",           source: "BEA",              color: "sky" },
+  hud_data:               { label: "Housing market data",              source: "HUD",              color: "sky" },
+  search_academic_papers: { label: "Searching peer-reviewed research", source: "Semantic Scholar",  color: "violet" },
+  search_openalex:        { label: "Searching academic literature",    source: "OpenAlex",         color: "violet" },
+  search_cbo_reports:     { label: "Searching budget analyses",        source: "CBO",              color: "violet" },
+  fetch_document_text:    { label: "Reading document",                 source: "Web",              color: "blue" },
+  web_search_news:        { label: "Searching recent news",            source: "Tavily",           color: "blue" },
+  code_execute:           { label: "Running calculation",              source: "Compute",          color: "emerald" },
   calculate_elasticity:   { label: "Computing price elasticity",       source: "Compute",          color: "emerald" },
   run_scenario_analysis:  { label: "Running scenario projections",     source: "Compute",          color: "emerald" },
-  market_competition_scan:{ label: "Market competition analysis",      source: "Compute",          color: "emerald" },
-  sec_10k_scan:           { label: "SEC 10-K filing analysis",         source: "SEC",              color: "orange" },
-  llm_chat:               { label: "LLM reasoning",                   source: "LLM",              color: "amber" },
-  llm_classify:           { label: "LLM classification",              source: "LLM",              color: "amber" },
-  google_adk:             { label: "Policy classification",            source: "Google ADK",       color: "amber" },
-  keyword_match:          { label: "Keyword scenario matching",        source: "Local",            color: "white" },
+  llm_classify:           { label: "Classifying policy",               source: "LLM",              color: "amber" },
+  keyword_match:          { label: "Matching known scenarios",          source: "Local",            color: "white" },
 };
 
 const SOURCE_COLORS: Record<string, { badge: string; border: string; bg: string }> = {
@@ -521,79 +519,81 @@ function parseToolCall(content: string): { name: string; args: Record<string, st
   return { name: content, args: null };
 }
 
-/** Tool call card — visually distinct with source badge + structured args */
+/** Parse tool_complete content: "fred_get_series(FEDMINNFRWG) → Federal Minimum Wage: 7.25 [120ms]" */
+function parseToolComplete(content: string): { name: string; query: string; result: string; duration: string } {
+  // Split on " → " to separate tool call from result
+  const arrowIdx = content.indexOf(" → ");
+  const callPart = arrowIdx > 0 ? content.slice(0, arrowIdx) : content;
+  const resultPart = arrowIdx > 0 ? content.slice(arrowIdx + 3) : "";
+
+  // Extract tool name and query from "tool_name(query)"
+  const parenIdx = callPart.indexOf("(");
+  const name = parenIdx > 0 ? callPart.slice(0, parenIdx).trim() : callPart.trim();
+  const query = parenIdx > 0 ? callPart.slice(parenIdx + 1).replace(/\)$/, "").trim() : "";
+
+  // Extract duration from "[120ms]" at end of result
+  const durationMatch = resultPart.match(/\[(\d+)ms\]$/);
+  const duration = durationMatch ? durationMatch[1] + "ms" : "";
+  const result = durationMatch ? resultPart.slice(0, durationMatch.index).trim() : resultPart.trim();
+
+  return { name, query, result, duration };
+}
+
+/** Tool call card — minimal, aesthetic display */
 function ToolCallCard({ entry, isLatest }: { entry: StreamEntry; isLatest: boolean }) {
-  const parsed = parseToolCall(entry.content);
-  const toolKey = entry.detail || parsed.name;
+  const { name, query, result, duration } = parseToolComplete(entry.content);
+  const toolKey = entry.detail || name;
   const info = TOOL_INFO[toolKey];
   const sc = SOURCE_COLORS[info?.color ?? "white"] ?? SOURCE_COLORS.white;
 
   return (
     <div className={cn(
-      "mx-6 my-2 rounded-xl border transition-all duration-300 spotlight-entry overflow-hidden",
-      isLatest ? `${sc.border} ${sc.bg} shadow-sm` : "border-white/[0.06] bg-white/[0.02]",
+      "mx-6 my-1.5 rounded-lg border transition-all duration-300 spotlight-entry",
+      isLatest ? `${sc.border} ${sc.bg}` : "border-white/[0.05] bg-white/[0.015]",
     )}>
-      {/* Header row: source badge + tool name + pulse */}
-      <div className="flex items-center gap-3 px-4 py-3">
-        <span className="text-sky-400/70 text-sm">⚙</span>
-        {info && (
-          <span className={cn("text-[10px] font-semibold uppercase tracking-wider rounded px-2 py-0.5 border", sc.badge)}>
-            {info.source}
-          </span>
-        )}
-        <span className="text-[14px] font-semibold text-white/80" style={{ fontFamily: "var(--font-mono), monospace" }}>
-          {toolKey}
+      <div className="flex items-start gap-3 px-3.5 py-2.5">
+        {/* Source badge */}
+        <span className={cn("text-[9px] font-bold uppercase tracking-widest rounded px-1.5 py-0.5 border mt-0.5 flex-shrink-0", sc.badge)}>
+          {info?.source ?? name.split("_")[0]}
         </span>
-        {isLatest && <span className="ml-auto h-2 w-2 rounded-full bg-sky-400 animate-pulse" />}
-      </div>
 
-      {/* Human-readable description */}
-      {info && (
-        <div className="px-4 -mt-1 pb-1">
-          <span className="text-[13px] text-white/35">{info.label}</span>
-        </div>
-      )}
+        <div className="flex-1 min-w-0">
+          {/* Tool description */}
+          <div className="text-[13px] text-white/60 leading-snug">
+            {info?.label ?? name}
+          </div>
 
-      {/* Structured arguments */}
-      {parsed.args && (
-        <div className="px-4 pb-3 pt-1">
-          {typeof parsed.args === "object" ? (
-            <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-              {Object.entries(parsed.args).map(([k, v]) => (
-                <div key={k} className="flex items-baseline gap-1.5 text-[13px]" style={{ fontFamily: "var(--font-mono), monospace" }}>
-                  <span className="text-white/25">{k}:</span>
-                  <span className="text-white/50">{truncate(String(v), 60)}</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[13px] text-white/40 leading-relaxed" style={{ fontFamily: "var(--font-mono), monospace" }}>
-              {truncate(parsed.args, 120)}
+          {/* Result summary */}
+          {result && (
+            <div className="text-[12px] text-white/35 mt-0.5 leading-snug truncate">
+              {truncate(result, 120)}
             </div>
           )}
         </div>
-      )}
+
+        {/* Duration + pulse */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {duration && (
+            <span className="text-[10px] text-white/20 tabular-nums">{duration}</span>
+          )}
+          {isLatest && <span className="h-1.5 w-1.5 rounded-full bg-sky-400 animate-pulse" />}
+        </div>
+      </div>
     </div>
   );
 }
 
-/** Tool result card — paired with tool call above it */
+/** Tool result card — shown only for standalone result events (rare) */
 function ToolResultCard({ entry }: { entry: StreamEntry }) {
-  // Parse "tool_name → result" format
   const arrowIdx = entry.content.indexOf(" → ");
   const resultText = arrowIdx > 0 ? entry.content.slice(arrowIdx + 3) : entry.content;
-  const toolKey = arrowIdx > 0 ? entry.content.slice(0, arrowIdx) : entry.detail;
-  const info = toolKey ? TOOL_INFO[toolKey] : null;
-  const sc = SOURCE_COLORS[info?.color ?? "white"] ?? SOURCE_COLORS.white;
 
   return (
-    <div className={cn("mx-6 -mt-0.5 mb-2 rounded-b-xl border border-t-0 spotlight-entry", "border-white/[0.06] bg-white/[0.015]")}>
-      <div className="flex items-start gap-3 px-4 py-2.5">
-        <span className="text-green-400/60 text-sm mt-0.5">✓</span>
-        <div className="flex-1 min-w-0">
-          <div className="text-[13px] text-white/45 leading-relaxed" style={{ fontFamily: "var(--font-mono), monospace" }}>
-            {truncate(resultText, 200)}
-          </div>
+    <div className="mx-6 mb-1 spotlight-entry">
+      <div className="flex items-start gap-2 px-3.5 py-1.5">
+        <span className="text-green-400/40 text-[11px] mt-0.5">✓</span>
+        <div className="text-[12px] text-white/30 leading-relaxed truncate">
+          {truncate(resultText, 150)}
         </div>
       </div>
     </div>
