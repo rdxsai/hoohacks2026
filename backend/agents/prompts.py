@@ -84,6 +84,8 @@ agent what to compute and what to skip. Example for REGULATORY_COST:
 6. Let the POLICY TYPE guide your data strategy: LABOR_COST → wage data; REGULATORY_COST → \
 industry cost structure, input prices; TRADE → import volumes, tariff rates; TRANSFER → income \
 distribution, poverty rates.
+7. **Before each tool call, write 1 sentence explaining what you need and why.** This reasoning \
+is shown to the user in real time. After getting results, note what you learned before the next call.
 """
 
 

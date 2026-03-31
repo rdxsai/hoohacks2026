@@ -90,7 +90,8 @@ class EventTranslator:
     def __init__(self) -> None:
         self._active_agent: str | None = None
         self._active_phase: str = "0"
-        self._seen_event_ids: set[str] = set()  # dedup custom events
+        self._seen_event_ids: set[str] = set()
+        self._overflow_events: list[dict] = []  # multi-event emissions
 
     def _resolve_phase(self, name: str) -> tuple[str, str, str] | None:
         """Resolve a phase node name, using active agent to disambiguate collisions."""
@@ -235,6 +236,7 @@ class EventTranslator:
             args = data.get("args", "")
             result = data.get("result", "")
             duration = data.get("duration_ms", 0)
+            reasoning = data.get("reasoning")
             agent = self._active_agent or "analyst"
 
             display = f"{tool}({args})"
@@ -243,23 +245,37 @@ class EventTranslator:
             if duration:
                 display += f" [{duration}ms]"
 
-            if agent == "analyst":
-                return {"type": "analyst_thinking", "agent": "analyst", "data": {
-                    "step_type": "tool_call", "content": display,
-                    "phase": self._active_phase, "tool": tool,
-                }, "timestamp": ts}
+            # Emit reasoning BEFORE the tool call if present
+            events = []
+            if reasoning:
+                event_type = {
+                    "analyst": "analyst_thinking",
+                    "Housing": "sector_agent_thinking",
+                    "Consumer": "sector_agent_thinking",
+                    "synthesis": "synthesis_thinking",
+                }.get(agent, "analyst_thinking")
+                reasoning_data = {"step_type": "reasoning", "content": reasoning, "phase": self._active_phase}
+                if agent in ("Housing", "Consumer"):
+                    reasoning_data["agent"] = agent
+                events.append({"type": event_type, "agent": agent, "data": reasoning_data, "timestamp": ts})
+
+            # Then the tool call
+            tool_data = {"step_type": "tool_call", "content": display, "phase": self._active_phase, "tool": tool}
             if agent in ("Housing", "Consumer"):
-                return {"type": "sector_agent_thinking", "agent": agent, "data": {
-                    "agent": agent, "step_type": "tool_call",
-                    "content": display,
-                    "phase": self._active_phase, "tool": tool,
-                }, "timestamp": ts}
-            if agent == "synthesis":
-                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
-                    "step_type": "tool_call", "content": display,
-                    "phase": self._active_phase, "tool": tool,
-                }, "timestamp": ts}
-            return None
+                tool_data["agent"] = agent
+            event_type = {
+                "analyst": "analyst_thinking",
+                "Housing": "sector_agent_thinking",
+                "Consumer": "sector_agent_thinking",
+                "synthesis": "synthesis_thinking",
+            }.get(agent, "analyst_thinking")
+            events.append({"type": event_type, "agent": agent, "data": tool_data, "timestamp": ts})
+
+            # Return first event; store overflow for next call
+            if len(events) > 1:
+                self._overflow_events = events[1:]
+                return events[0]
+            return events[0] if events else None
 
         # Tool activity (legacy — from tool wrappers)
         if name == "tool_activity":

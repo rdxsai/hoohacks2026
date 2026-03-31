@@ -212,9 +212,9 @@ async def _run_react_phase(
     input_msg = {"messages": [HumanMessage(content=user_message)]}
     tool_records: list[ToolCallRecord] = []
     final_messages: list = []
-    _reasoning_buffer: list[str] = []
-    _in_json_output = False  # Track when LLM is generating JSON
-    _pending_tool: dict | None = None  # Buffer tool start until we get the end
+    _reasoning_texts: list[str] = []
+    _pending_reasoning: str = ""  # Reasoning before the current tool call
+    _pending_tool: dict | None = None
     import time as _time
 
     async for event in agent.astream_events(
@@ -226,13 +226,29 @@ async def _run_react_phase(
         name = event.get("name", "")
         data = event.get("data", {})
 
-        # Tool call starting — buffer it, we'll emit on completion
-        if kind == "on_tool_start":
+        # ----- LLM turn complete → collect reasoning from content field -----
+        # GPT-4o puts natural language reasoning in content AND tool calls
+        # in tool_calls — they're separate fields. We collect reasoning
+        # and return it so the caller (node function) can dispatch it.
+        if kind == "on_chat_model_end":
+            output = data.get("output")
+            if output:
+                content = getattr(output, "content", "")
+                if isinstance(content, str) and content.strip():
+                    text = content.strip()
+                    if not _is_json_text(text) and len(text) > 20:
+                        _reasoning_texts.append(text[:600])
+                        _pending_reasoning = text[:300]
+
+        # ----- Tool call starting → buffer for duration tracking -----
+        elif kind == "on_tool_start":
             tool_input = data.get("input", {})
-            # Format args as human-readable
             if isinstance(tool_input, dict):
-                # Pick the most meaningful arg
-                key_arg = tool_input.get("series_id") or tool_input.get("query") or tool_input.get("series_ids") or tool_input.get("url") or tool_input.get("code", "")[:40]
+                key_arg = (tool_input.get("series_id")
+                           or tool_input.get("query")
+                           or tool_input.get("series_ids")
+                           or tool_input.get("url")
+                           or tool_input.get("code", "")[:40] or "")
                 if isinstance(key_arg, list):
                     key_arg = ", ".join(str(s) for s in key_arg[:4])
                     if len(tool_input.get("series_ids", [])) > 4:
@@ -241,25 +257,12 @@ async def _run_react_phase(
             else:
                 args_display = str(tool_input)[:80]
             _pending_tool = {"name": name, "args": args_display, "t0": _time.perf_counter()}
-            # Flush reasoning buffer before tool call
-            if _reasoning_buffer and parent_config:
-                text = "".join(_reasoning_buffer).strip()
-                _reasoning_buffer.clear()
-                if text and not _is_json_text(text):
-                    try:
-                        await adispatch_custom_event("agent_reasoning", {
-                            "content": text[:500], "phase": str(phase_num),
-                        }, config=parent_config)
-                    except Exception:
-                        pass
-            _in_json_output = False  # Reset — new turn after tool result
-            logger.info(f"Phase {phase_num} tool call: {name}({args_display[:60]})")
+            logger.info(f"Phase {phase_num} tool: {name}({args_display[:60]})")
 
-        # Tool call completed — emit single clean event with duration + result summary
+        # ----- Tool call completed → emit clean event -----
         elif kind == "on_tool_end":
             output_obj = data.get("output", "")
             raw_output = getattr(output_obj, "content", None) or str(output_obj)
-            # Extract a meaningful summary from tool output
             result_summary = _summarize_tool_result(name, raw_output)
             duration_ms = 0
             if _pending_tool and _pending_tool["name"] == name:
@@ -281,42 +284,12 @@ async def _run_react_phase(
                         "result": result_summary,
                         "duration_ms": duration_ms,
                         "phase": str(phase_num),
+                        "reasoning": _pending_reasoning if _pending_reasoning else None,
                     }, config=parent_config)
                 except Exception:
                     pass
             _pending_tool = None
-
-        # LLM reasoning tokens — buffer and filter JSON
-        elif kind == "on_chat_model_stream":
-            chunk = data.get("chunk")
-            if chunk and parent_config:
-                content = getattr(chunk, "content", None)
-                if isinstance(content, str) and content:
-                    # Detect JSON output start
-                    if "```json" in content or content.strip().startswith("{"):
-                        _in_json_output = True
-                    if _in_json_output:
-                        # Check if JSON output ended
-                        if "```" in content and not content.strip().startswith("```"):
-                            _in_json_output = False
-                        continue  # Skip all JSON output tokens
-
-                    _reasoning_buffer.append(content)
-                    buffered = "".join(_reasoning_buffer)
-
-                    # Flush at sentence boundary or buffer threshold
-                    if len(buffered) > 100 or buffered.rstrip().endswith((".", "!", "?", ":")):
-                        text = buffered.strip()
-                        _reasoning_buffer.clear()
-
-                        if text and not _is_json_text(text):
-                            try:
-                                await adispatch_custom_event("agent_reasoning", {
-                                    "content": text[:500],
-                                    "phase": str(phase_num),
-                                }, config=parent_config)
-                            except Exception:
-                                pass
+            _pending_reasoning = ""  # Clear after attaching to tool event
 
         # Capture final messages from the outermost chain completion
         elif kind == "on_chain_end" and name == "LangGraph":
@@ -324,20 +297,7 @@ async def _run_react_phase(
             if isinstance(output, dict) and "messages" in output:
                 final_messages = output["messages"]
 
-    # Flush any remaining reasoning buffer
-    if _reasoning_buffer and parent_config:
-        text = "".join(_reasoning_buffer).strip()
-        if text and not text.startswith(("```", '{"', '"', "}", "{")):
-            try:
-                await adispatch_custom_event("agent_reasoning", {
-                    "content": text[:500],
-                    "phase": str(phase_num),
-                }, config=parent_config)
-            except Exception:
-                pass
-        _reasoning_buffer.clear()
-
-    logger.info(f"Phase {phase_num} message count: {len(final_messages)}, tool calls: {len(tool_records)}")
+    logger.info(f"Phase {phase_num} message count: {len(final_messages)}, tool calls: {len(tool_records)}, reasoning: {len(_reasoning_texts)}")
 
     if not final_messages:
         raise ValueError(f"Phase {phase_num}: ReAct agent produced no messages")
