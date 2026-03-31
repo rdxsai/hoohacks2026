@@ -579,3 +579,75 @@ async def _summarize_briefing(
         return result or "Briefing data collected — LLM summary unavailable."
     except Exception:
         return "Briefing data collected — LLM summary unavailable."
+
+
+# ---------------------------------------------------------------------------
+# Standalone simple analyst (for use by pipeline graph node)
+# ---------------------------------------------------------------------------
+
+async def _run_simple_analyst_standalone(
+    query: str, policy_type: str, policy_params: dict[str, Any]
+) -> dict[str, Any]:
+    """Run the simple analyst without PipelineState or emit callback.
+
+    Used by the pipeline graph's analyst_node as a fallback when
+    the LangGraph analyst crashes.
+    """
+    strategy = SEARCH_STRATEGIES.get(policy_type, DEFAULT_STRATEGY)
+
+    for step in strategy:
+        if step["tool"] == "web_search_news" and not step["args"].get("query"):
+            step["args"]["query"] = query
+
+    briefing_data: dict[str, Any] = {}
+    tool_records: list[dict[str, Any]] = []
+
+    for step in strategy:
+        result = await _call_tool(step["tool"], step["args"])
+        summary = _summarize_result(step["tool"], result)
+        tool_records.append({"tool": step["tool"], "args": step["args"], "success": "error" not in result, "summary": summary})
+        briefing_data[f"{step['tool']}_{len(tool_records)}"] = result
+
+    data_str = json.dumps(briefing_data, default=str)[:8000]
+    try:
+        briefing_summary = await llm_chat(
+            system_prompt=ANALYST_SUMMARY_SYSTEM,
+            user_prompt=f"Policy question: {query}\nPolicy type: {policy_type}\nRaw API data:\n{data_str}",
+            temperature=0.2,
+            max_tokens=2000,
+        )
+    except Exception:
+        briefing_summary = "Briefing data collected — LLM summary unavailable."
+
+    # Map classifier policy_type to analyst taxonomy
+    _classifier_to_analyst_type = {
+        "labor": "LABOR_COST", "minimum_wage": "LABOR_COST",
+        "trade": "TRADE", "trade_tariff": "TRADE", "tariff": "TRADE",
+        "immigration": "LABOR_COST",
+        "education_finance": "TRANSFER", "education": "TRANSFER",
+        "tax_policy": "TAX_FISCAL", "tax": "TAX_FISCAL",
+        "housing_regulation": "LAND_USE", "housing": "LAND_USE",
+        "healthcare": "REGULATORY_COST",
+        "environmental": "REGULATORY_COST",
+    }
+    _income_effect_by_type = {
+        "LABOR_COST": True, "TRANSFER": True, "TAX_FISCAL": True,
+        "TRADE": None, "REGULATORY_COST": False, "LAND_USE": False,
+    }
+    analyst_type = _classifier_to_analyst_type.get(policy_type, "OTHER")
+    income_effect = _income_effect_by_type.get(analyst_type)
+
+    return {
+        "raw_data": briefing_data,
+        "summary": briefing_summary or "",
+        "tool_calls": tool_records,
+        "policy_params": policy_params,
+        "policy_type": analyst_type,
+        "income_effect_exists": income_effect,
+        "policy_spec": {
+            "policy_type": analyst_type,
+            "income_effect_exists": income_effect,
+            "action": policy_params.get("policy_name", ""),
+            "value": "", "scope": "", "timeline": "", "current_baseline": "",
+        },
+    }
