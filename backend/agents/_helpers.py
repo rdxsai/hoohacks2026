@@ -212,8 +212,7 @@ async def _run_react_phase(
     input_msg = {"messages": [HumanMessage(content=user_message)]}
     tool_records: list[ToolCallRecord] = []
     final_messages: list = []
-    _reasoning_texts: list[str] = []
-    _pending_reasoning: str = ""  # Reasoning before the current tool call
+    _reasoning_buffer: list[str] = []  # Token buffer for streaming
     _pending_tool: dict | None = None
     import time as _time
 
@@ -226,31 +225,57 @@ async def _run_react_phase(
         name = event.get("name", "")
         data = event.get("data", {})
 
-        # ----- LLM turn complete → collect reasoning from content field -----
-        # Claude: content is a list of blocks: [{"type":"text","text":"..."}, {"type":"tool_use",...}]
-        # GPT-4o: content is a string (usually empty on tool-calling turns)
-        # We extract text blocks as the agent's reasoning.
-        if kind == "on_chat_model_end":
-            output = data.get("output")
-            if output:
-                content = getattr(output, "content", "")
-                reasoning_text = ""
-
-                if isinstance(content, list):
-                    # Claude format: list of typed blocks
-                    text_parts = []
+        # ----- LLM streaming tokens → dispatch reasoning in real time -----
+        # Claude streams text tokens as it generates. We buffer and flush
+        # at sentence boundaries so the UI shows reasoning appearing live,
+        # not all at once after the LLM finishes.
+        if kind == "on_chat_model_stream":
+            chunk = data.get("chunk")
+            if chunk and parent_config:
+                content = getattr(chunk, "content", "")
+                # Claude stream: content is a string (text delta) or list
+                text_delta = ""
+                if isinstance(content, str):
+                    text_delta = content
+                elif isinstance(content, list):
                     for block in content:
                         if isinstance(block, dict) and block.get("type") == "text":
-                            text_parts.append(block["text"])
+                            text_delta += block.get("text", "")
                         elif isinstance(block, str):
-                            text_parts.append(block)
-                    reasoning_text = " ".join(text_parts).strip()
-                elif isinstance(content, str):
-                    reasoning_text = content.strip()
+                            text_delta += block
 
-                if reasoning_text and not _is_json_text(reasoning_text) and len(reasoning_text) > 20:
-                    _reasoning_texts.append(reasoning_text[:600])
-                    _pending_reasoning = reasoning_text[:300]
+                if text_delta:
+                    _reasoning_buffer.append(text_delta)
+                    buffered = "".join(_reasoning_buffer)
+
+                    # Flush at sentence boundary or every ~100 chars
+                    if len(buffered) > 100 or buffered.rstrip().endswith((".", "!", "?", ":")):
+                        text = buffered.strip()
+                        _reasoning_buffer.clear()
+
+                        if text and not _is_json_text(text) and len(text) > 15:
+                            try:
+                                await adispatch_custom_event("agent_reasoning", {
+                                    "content": text[:500],
+                                    "phase": str(phase_num),
+                                }, config=parent_config)
+                            except Exception:
+                                pass
+
+        # ----- LLM turn complete → flush buffer, no duplicate dispatch -----
+        elif kind == "on_chat_model_end":
+            # Flush remaining stream buffer
+            if _reasoning_buffer and parent_config:
+                text = "".join(_reasoning_buffer).strip()
+                _reasoning_buffer.clear()
+                if text and not _is_json_text(text) and len(text) > 15:
+                    try:
+                        await adispatch_custom_event("agent_reasoning", {
+                            "content": text[:500],
+                            "phase": str(phase_num),
+                        }, config=parent_config)
+                    except Exception:
+                        pass
 
         # ----- Tool call starting → buffer for duration tracking -----
         elif kind == "on_tool_start":
@@ -296,7 +321,6 @@ async def _run_react_phase(
                         "result": result_summary,
                         "duration_ms": duration_ms,
                         "phase": str(phase_num),
-                        "reasoning": _pending_reasoning if _pending_reasoning else None,
                     }, config=parent_config)
                     logger.info(f"Phase {phase_num} dispatched tool_complete for {name}")
                 except Exception as dispatch_err:
@@ -304,7 +328,6 @@ async def _run_react_phase(
             else:
                 logger.warning(f"Phase {phase_num} no parent_config — cannot dispatch tool_complete")
             _pending_tool = None
-            _pending_reasoning = ""  # Clear after attaching to tool event
 
         # Capture final messages from the outermost chain completion
         elif kind == "on_chain_end" and name == "LangGraph":
@@ -312,7 +335,7 @@ async def _run_react_phase(
             if isinstance(output, dict) and "messages" in output:
                 final_messages = output["messages"]
 
-    logger.info(f"Phase {phase_num} message count: {len(final_messages)}, tool calls: {len(tool_records)}, reasoning: {len(_reasoning_texts)}")
+    logger.info(f"Phase {phase_num} message count: {len(final_messages)}, tool calls: {len(tool_records)}")
 
     if not final_messages:
         raise ValueError(f"Phase {phase_num}: ReAct agent produced no messages")

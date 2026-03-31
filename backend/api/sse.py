@@ -47,11 +47,6 @@ async def _event_stream(
             if translated is not None:
                 data = json.dumps(translated, default=str)
                 yield f"data: {data}\n\n"
-            # Drain any overflow events (e.g., reasoning + tool_call pair)
-            while translator._overflow_events:
-                overflow = translator._overflow_events.pop(0)
-                data = json.dumps(overflow, default=str)
-                yield f"data: {data}\n\n"
 
         # Pipeline complete
         total = time.time() - initial["start_time"]
