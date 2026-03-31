@@ -1,84 +1,63 @@
 """
 Query endpoint — non-streaming entry point for the pipeline.
 
-===========================================================================
-INTEGRATION GUIDE
-===========================================================================
-STATUS: 🟢 REAL — runs the full pipeline and returns results.
-
-Two modes:
-  1. POST /api/analyze — runs pipeline, returns full SynthesisReport
-  2. GET /stream — SSE streaming (see sse.py)
-
-Most frontends will use the SSE endpoint for real-time updates.
-This endpoint is useful for testing, scripting, and non-interactive use.
-
-OWNER: Praneeth (endpoint) + Rudra (pipeline internals)
-===========================================================================
+POST /api/analyze runs the full LangGraph pipeline and returns the
+synthesis report when complete.
 """
 
 from __future__ import annotations
 
+import time
+import uuid
+
 from fastapi import APIRouter
 
-from backend.models.api import QueryRequest, QueryResponse
-from backend.pipeline.orchestrator import run_pipeline
+from backend.models.api import QueryRequest
 
 router = APIRouter()
 
 
 @router.post("/analyze", response_model=None)
 async def analyze_policy(request: QueryRequest) -> dict:
-    """
-    Run the full PolicyPulse analysis pipeline (non-streaming).
+    """Run the full PolicyPulse analysis pipeline (non-streaming)."""
+    from backend.pipeline.graph import build_pipeline_graph
 
-    Returns the complete SynthesisReport with all sector reports,
-    debate results, and Sankey visualization data.
-    """
-    state = await run_pipeline(
-        query=request.query,
-        user_context=request.context.model_dump(exclude_none=True),
-    )
+    graph = build_pipeline_graph()
 
-    if state.synthesis:
-        return state.synthesis.model_dump()
+    initial = {
+        "query": request.query,
+        "user_context": request.context.model_dump(exclude_none=True),
+        "session_id": str(uuid.uuid4()),
+        "start_time": time.time(),
+        "sector_reports": [],
+        "stage_times": {},
+    }
+
+    final = await graph.ainvoke(initial)
+
+    if final.get("synthesis_report"):
+        report = final["synthesis_report"]
+        if hasattr(report, "model_dump"):
+            return report.model_dump()
+        return report
 
     return {
         "error": "Pipeline did not produce a synthesis report",
-        "session_id": state.session_id,
-        "stage_times": state.stage_times,
+        "session_id": initial["session_id"],
+        "stage_times": final.get("stage_times", {}),
     }
 
 
 @router.get("/health/pipeline")
 async def pipeline_health() -> dict:
-    """Check that the pipeline modules are importable."""
+    """Check that the pipeline graph is importable."""
     checks = {}
     try:
-        from backend.pipeline.classifier import run_classifier
-        checks["classifier"] = "ok"
+        from backend.pipeline.graph import build_pipeline_graph
+        g = build_pipeline_graph()
+        checks["graph"] = "ok"
+        checks["nodes"] = len(g.get_graph().nodes)
     except Exception as e:
-        checks["classifier"] = str(e)
-    try:
-        from backend.pipeline.analyst import run_analyst
-        checks["analyst"] = "ok"
-    except Exception as e:
-        checks["analyst"] = str(e)
-    try:
-        from backend.pipeline.sector import run_sector_agents
-        checks["sector"] = "ok"
-    except Exception as e:
-        checks["sector"] = str(e)
-    try:
-        from backend.pipeline.synthesis import run_synthesis
-        checks["synthesis"] = "ok"
-    except Exception as e:
-        checks["synthesis"] = str(e)
-    try:
-        from backend.lightning.premium_agent import PremiumDataAgent
-        checks["lightning"] = "ok"
-    except Exception as e:
-        checks["lightning"] = str(e)
+        checks["graph"] = str(e)
 
-    all_ok = all(v == "ok" for v in checks.values())
-    return {"status": "ok" if all_ok else "degraded", "modules": checks}
+    return {"status": "ok" if checks.get("graph") == "ok" else "degraded", "modules": checks}

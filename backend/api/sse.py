@@ -1,37 +1,22 @@
 """
-SSE streaming endpoint — connects the pipeline to the frontend.
+SSE streaming endpoint — streams LangGraph pipeline events to the frontend.
 
-===========================================================================
-INTEGRATION GUIDE
-===========================================================================
-STATUS: 🟢 REAL — streams live pipeline events via Server-Sent Events.
-
-Samank's frontend connects to:
-  GET /stream?query=...&context=...
-
-This route:
-  1. Starts the pipeline in a background task
-  2. Each pipeline stage emits events via the callback
-  3. Events are streamed to the frontend as SSE
-
-Event format (matches frontend types in pipeline.ts):
-  data: {"type": "classifier_complete", "agent": "classifier", "data": {...}, "timestamp": 1234567890.0}
-
-OWNER: Praneeth (endpoint) + Samank (frontend consumption)
-===========================================================================
+The frontend connects to GET /stream?query=... and receives real-time events
+as each pipeline stage executes. Uses graph.astream_events() for native
+LangGraph event streaming — no manual emit callbacks or asyncio queues.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import time
+import uuid
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, Query
 from starlette.responses import StreamingResponse
 
-from backend.pipeline.orchestrator import run_pipeline
+from backend.api.event_translator import translate_event
 
 router = APIRouter()
 
@@ -40,57 +25,58 @@ async def _event_stream(
     query: str,
     user_context: dict[str, Any],
 ) -> AsyncGenerator[str, None]:
-    """Generate SSE events from the pipeline."""
-    event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+    """Stream LangGraph pipeline events as SSE."""
+    from backend.pipeline.graph import build_pipeline_graph
 
-    async def emit(event: dict[str, Any]) -> None:
-        await event_queue.put(event)
+    graph = build_pipeline_graph()
 
-    async def run_and_signal_done() -> None:
-        try:
-            await run_pipeline(query=query, user_context=user_context, emit=emit)
-        except Exception as e:
-            await event_queue.put({
-                "type": "pipeline_error",
-                "data": {"error": str(e)},
-                "timestamp": time.time(),
-            })
-        finally:
-            await event_queue.put(None)  # sentinel to stop the stream
-
-    # Start pipeline as a background task
-    task = asyncio.create_task(run_and_signal_done())
+    initial = {
+        "query": query,
+        "user_context": user_context,
+        "session_id": str(uuid.uuid4()),
+        "start_time": time.time(),
+        "sector_reports": [],
+        "stage_times": {},
+    }
 
     try:
-        while True:
-            event = await event_queue.get()
-            if event is None:
-                break
-            # Format as SSE
-            data = json.dumps(event, default=str)
-            yield f"data: {data}\n\n"
-    finally:
-        if not task.done():
-            task.cancel()
+        async for event in graph.astream_events(initial, version="v2"):
+            translated = translate_event(event)
+            if translated is not None:
+                data = json.dumps(translated, default=str)
+                yield f"data: {data}\n\n"
+
+        # Pipeline complete
+        total = time.time() - initial["start_time"]
+        complete_event = {
+            "type": "pipeline_complete",
+            "data": {
+                "session_id": initial["session_id"],
+                "total_seconds": round(total, 1),
+            },
+            "timestamp": time.time(),
+        }
+        yield f"data: {json.dumps(complete_event, default=str)}\n\n"
+
+    except Exception as e:
+        error_event = {
+            "type": "pipeline_error",
+            "data": {"error": str(e)},
+            "timestamp": time.time(),
+        }
+        yield f"data: {json.dumps(error_event, default=str)}\n\n"
 
 
 @router.get("/stream")
 async def stream_pipeline(
     query: str = Query(..., min_length=10, description="The policy question"),
-    role: str = Query(None, description="User role (student, business owner, etc.)"),
+    role: str = Query(None, description="User role"),
     graduation_year: int = Query(None, description="Graduation year"),
     field: str = Query(None, description="Field of study/work"),
     location: str = Query(None, description="User location"),
     concern: str = Query(None, description="Primary concern"),
 ) -> StreamingResponse:
-    """
-    Stream the full analysis pipeline as Server-Sent Events.
-
-    The frontend connects to this endpoint and receives real-time events
-    as each pipeline stage completes. Events include classifier results,
-    analyst tool calls, Lightning payments, sector reports, debate
-    challenges, and the final synthesis.
-    """
+    """Stream the full analysis pipeline as Server-Sent Events."""
     user_context = {
         k: v for k, v in {
             "role": role,
@@ -107,6 +93,6 @@ async def stream_pipeline(
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",  # disable nginx buffering
+            "X-Accel-Buffering": "no",
         },
     )
