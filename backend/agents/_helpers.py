@@ -232,14 +232,18 @@ async def _run_react_phase(
     final_messages: list = []
     _reasoning_buffer: list[str] = []  # Token buffer for streaming
     _pending_tool: dict | None = None
+    _has_streamed_reasoning = False  # Track if current LLM turn produced any reasoning
+    _llm_turn_count = 0
     import time as _time
 
     async def _flush_reasoning():
         """Flush accumulated reasoning buffer as a single event."""
+        nonlocal _has_streamed_reasoning
         if _reasoning_buffer and parent_config:
             text = "".join(_reasoning_buffer).strip()
             _reasoning_buffer.clear()
             if text and not _is_json_text(text) and len(text) > 15:
+                _has_streamed_reasoning = True
                 text = _strip_markdown(text)
                 try:
                     await adispatch_custom_event("agent_reasoning", {
@@ -257,6 +261,11 @@ async def _run_react_phase(
         kind = event.get("event", "")
         name = event.get("name", "")
         data = event.get("data", {})
+
+        # ----- LLM generation starting → track turns -----
+        if kind == "on_chat_model_start":
+            _llm_turn_count += 1
+            _has_streamed_reasoning = False
 
         # ----- LLM streaming tokens → dispatch reasoning in real time -----
         # Claude streams text tokens as it generates. We buffer and flush
@@ -285,6 +294,19 @@ async def _run_react_phase(
         # ----- LLM turn complete → flush remaining buffer -----
         elif kind == "on_chat_model_end":
             await _flush_reasoning()
+            # If this turn produced no visible reasoning (all JSON), emit a status
+            if not _has_streamed_reasoning and parent_config:
+                output = data.get("output")
+                has_tool_calls = bool(getattr(output, "tool_calls", []) if output else [])
+                if not has_tool_calls:
+                    # Final turn — producing structured output
+                    try:
+                        await adispatch_custom_event("agent_reasoning", {
+                            "content": "Producing structured analysis...",
+                            "phase": str(phase_num),
+                        }, config=parent_config)
+                    except Exception:
+                        pass
 
         # ----- Tool call starting → flush reasoning, then buffer tool -----
         elif kind == "on_tool_start":
