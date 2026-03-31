@@ -90,6 +90,7 @@ class EventTranslator:
     def __init__(self) -> None:
         self._active_agent: str | None = None
         self._active_phase: str = "0"
+        self._seen_event_ids: set[str] = set()  # dedup custom events
 
     def _resolve_phase(self, name: str) -> tuple[str, str, str] | None:
         """Resolve a phase node name, using active agent to disambiguate collisions."""
@@ -109,8 +110,18 @@ class EventTranslator:
 
         # ==============================================================
         # Custom events (from adispatch_custom_event in node functions)
+        # Dedup: events may arrive twice (from sub-graph stream + parent forwarding)
         # ==============================================================
         if kind == "on_custom_event":
+            # Dedup: events propagate both directly and via _run_subgraph
+            # forwarding, causing duplicates. Use content hash to deduplicate.
+            dedup_key = f"{name}:{str(data)[:80]}"
+            if dedup_key in self._seen_event_ids:
+                return None
+            self._seen_event_ids.add(dedup_key)
+            # Cap dedup set to prevent memory growth
+            if len(self._seen_event_ids) > 2000:
+                self._seen_event_ids.clear()
             return self._handle_custom(name, data, ts)
 
         # ==============================================================
@@ -212,7 +223,30 @@ class EventTranslator:
             event_type, agent = mapping[name]
             return {"type": event_type, "agent": agent, "data": data, "timestamp": ts}
 
-        # Tool activity from tool wrappers (via _record_timing_async)
+        # LLM reasoning between tool calls (from _run_react_phase)
+        if name == "agent_reasoning":
+            content = data.get("content", "")
+            phase = data.get("phase", self._active_phase)
+            agent = self._active_agent or "analyst"
+
+            if agent == "analyst":
+                return {"type": "analyst_thinking", "agent": "analyst", "data": {
+                    "step_type": "reasoning", "content": content,
+                    "phase": phase,
+                }, "timestamp": ts}
+            if agent in ("Housing", "Consumer"):
+                return {"type": "sector_agent_thinking", "agent": agent, "data": {
+                    "agent": agent, "step_type": "reasoning",
+                    "content": content, "phase": phase,
+                }, "timestamp": ts}
+            if agent == "synthesis":
+                return {"type": "synthesis_thinking", "agent": "synthesis", "data": {
+                    "step_type": "reasoning", "content": content,
+                    "phase": phase,
+                }, "timestamp": ts}
+            return None
+
+        # Tool activity from tool wrappers
         if name == "tool_activity":
             tool = data.get("tool", "")
             args = data.get("args", "")
